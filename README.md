@@ -4,6 +4,12 @@
 Gothic2 Night Raven NK; Union; shows quest givers NPC names on screen.  
 should work for any mod based on Gothic2 Night Raven; tested on Chronicles of Myrtana.  
 
+Install:  
+drop the NPCnames.dll into:  
+Gothic2/system/Autorun  
+if Autorun folder does not exist, install Union.  
+Requires Union 1.0m  
+
 // SETTINGS  ([NpcNames] section)  
 //   StartMode=0       0 = quest/trader/important, 1 = quest/trader, 2 = off  
 //   Radius=1500       cm  
