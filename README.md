@@ -2,7 +2,7 @@
 
 -> translate.google.com  
 Gothic2 Night Raven NK; Union; shows quest givers NPC names on screen.  
-should work for any mod based on Gothic2 Night Raven; tested on Chronicles of Myrtana.  
+should work for any mod based on Gothic2 Night Raven; tested on Chronicles of Myrtana and New Balance.  
 
 Install:  
 drop the NPCnames.dll into:  
