@@ -23,8 +23,10 @@ Requires Union 1.0m
 // Hotkey: LShift + K cycles  ALL -> QUEST/merchant -> OFF  
 
 Orange = quest giver *in the current moment* MEANING-> talk -> get quest -> name disappears  
+Cyan = NPC who will auto initiate conversation when in close range.  
 $ Orange = quest giver + merchant  
 $ Gold = merchant  
+
 font size is equal to chosen font, FONT_DEFAULT.TGA seems to be the smallest.  
 the logic uses cache which only does any calculation every 15sec, capped for only 3 NPCs per frame.  
 the NPC name will be the exact bit value as in game, MEANING it supports all languages.  
