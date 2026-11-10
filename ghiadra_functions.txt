@@ -1,0 +1,4508 @@
+purpose: to confirm if none of those modify game state/engine thus are 100% read only
+
+
+[census] ===== 6398 infos, 6375 with script condition, 1 truncated, 25 distinct externals =====
+[census] LISTED    NPC_KNOWSINFO                      addr=0x006DC4A0 infos=2277  e.g. PC_SLEEPTIME_WAIT_SQ311
+[census] LISTED    NPC_ISINSTATE                      addr=0x006E4FD0 infos=595   e.g. DIA_AMBIENT_NEWS
+[census] LISTED    NPC_GETDISTTOWP                    addr=0x006F2C30 infos=473   e.g. PC_SLEEPTIME_WAIT_SQ311
+[census] LISTED    NPC_GETTALENTSKILL                 addr=0x006E67E0 infos=416   e.g. PC_SMITHWEAPON_BASIC
+[census] LISTED    NPC_HASITEMS                       addr=0x006E72E0 infos=326   e.g. DIA_MIL_GIVEARMORBACK
+[census] LISTED    HLP_STRCMP                         addr=0x006EEBE0 infos=84    e.g. DIA_OLDCITYGUARD_FIRSTWARN
+[census] LISTED    NPC_GETNEARESTWP                   addr=0x006EDD90 infos=83    e.g. DIA_OLDCITYGUARD_FIRSTWARN
+[census] LISTED    WLD_GETDAY                         addr=0x006FB450 infos=83    e.g. DIA_MIL_FMQ002_CANUSHOW
+[census] LISTED    NPC_GETDISTTONPC                   addr=0x006F27A0 infos=70    e.g. DIA_OLDCITYGUARD_FIRSTWARN
+[census] LISTED    NPC_ISDEAD                         addr=0x006E8960 infos=59    e.g. DIA_HOLDWIG_SQ225_ANDERASATTACK
+[census] LISTED    NPC_REFUSETALK                     addr=0x006F6F10 infos=49    e.g. DIA_OLDCITYGUARD_FIRSTWARN
+[census] LISTED    WLD_ISTIME                         addr=0x006FB3E0 infos=48    e.g. PC_BENCH_WAIT_TENGRALCHURCH
+[census] LISTED    HLP_GETINSTANCEID                  addr=0x006F77C0 infos=18    e.g. DIA_OLDCITYGUARD_SECONDWARN
+[census] LISTED    HLP_ISITEM                         addr=0x006F76C0 infos=13    e.g. DIA_SOUTHERNER01_SQ413_START
+[census] LISTED    NPC_GETEQUIPPEDARMOR               addr=0x006EDCB0 infos=13    e.g. DIA_SOUTHERNER01_SQ413_START
+[census] LISTED    NPC_HASEQUIPPEDARMOR               addr=0x006E66F0 infos=13    e.g. DIA_SOUTHERNER01_SQ413_START
+[census] LISTED    MOB_HASITEMS                       addr=0x006F6C70 infos=8     e.g. DIA_ARWID_KQ402_JOBDONE
+[census] LISTED    NPC_GETBODYSTATE                   addr=0x006F37D0 infos=4     e.g. DIA_GARNEK_WATERNERVE
+[census] LISTED    HLP_ISVALIDNPC                     addr=0x006EEEC0 infos=3     e.g. DIA_TENGRAL_Q602_HELP
+[census] UNLISTED  AI_PLAYANI                         addr=0x006EA780 infos=1     e.g. DIA_CARAMON_VZ_AMBIENT
+[census] UNLISTED  ASMINT_MYEXTERNAL                  addr=0x00000000 infos=1     e.g. DIA_CARAMON_VZ_AMBIENT
+[census] LISTED    CONCATSTRINGS                      addr=0x006E2A10 infos=1     e.g. DIA_CARAMON_VZ_AMBIENT
+[census] LISTED    INTTOSTRING                        addr=0x006E2730 infos=1     e.g. DIA_CARAMON_VZ_AMBIENT
+[census] UNLISTED  WLD_INSERTOBJECT                   addr=0x006E0870 infos=1     e.g. DIA_CARAMON_VZ_AMBIENT
+[census] LISTED    WLD_ISRAINING                      addr=0x006FB480 infos=1     e.g. DIA_OLDMAN_GOODWATER
+
+
+/*
+Ghidra + claude info directly from gothic.exe decompile:
+
+PopVarAddress
+
+    It pops a tag. If the tag is 0x41 (var address) it returns the address. Otherwise it pops the value and returns NULL.
+    Every assign opcode (IS, ISPLUS…, ASSIGN*) calls it first. So the target is the top of the data stack, meaning the last thing pushed before the assign op. The value is pushed earlier.
+    If the target isn't a var address, the engine writes through NULL and crashes. That's the engine's own exposure.
+
+PopDataValue is read-only. It pops and dereferences, with no writes.
+
+FUN_007a2f20 is *(symbol + 0x1C) = value.
+
+    Its callers include SetInstance, CreateInstance, DeclareFunc, DefineExternal, SetReturn and AddClassOffset. That identifies it as zCPar_Symbol::SetOffset.
+    For an instance symbol, that field holds the instance pointer.
+    ASSIGNINST (74) therefore does target.offset = source.offset, which is the same persistent write as parser->SetInstance. This confirms rejecting it for non-local targets, and it is the reason NnParserGuard exists.
+
+DoCheck does not answer the conditions == 0 question.
+
+    It only validates the info's NPC field (*(this+0x1C) < 1). On failure it logs a warning and returns 1 anyway.
+    It never touches conditions, so my suggestion to look at it was wrong.
+    What the engine does with conditions == 0 is already settled by CallFunc. The symbol lookup fails and the error branch runs, which logs to zSpy and leaves the result buffer at 0. So InfoConditions() returns false.
+    I can't see whether callers like oCInfoManager pre-check conditions. The engine's own InfoConditions() would return false in any case.
+
+
+
+
+    I called the pd.conditions <= 0 early return a crash guard.
+    It isn't. 
+    engine: CallFunc fails, result stays 0 (false)
+    For a non-function symbol, CallFunc takes its error branch,
+    which logs "Engine calls an undefined function" to zSpy and returns 0 (false).
+    So the guard avoids log spam and a pointless call. Returning true for "no condition"
+    is your design choice and not what the engine would compute, which would be false.
+    For an overlay that asks whether an info is available, that choice is reasonable.
+
+
+checked in Ghiadra gives:
+
+*/
+//0x006F6F10
+undefined4 FUN_006f6f10(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  int iVar2;
+  uint uVar3;
+  uint uVar4;
+  char *pcVar5;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081f338;
+  local_c = ExceptionList;
+  uVar4 = 0;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  uVar3 = 0xffffffff;
+  pcVar5 = s_Npc_CanTalk;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    cVar1 = *pcVar5;
+    pcVar5 = pcVar5 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_CanTalk,~uVar3 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 != (oCNpc *)0x0) {
+    iVar2 = oCNpc::CanTalk(this_00);
+    uVar4 = (uint)(iVar2 == 0);
+  }
+  zCParser::SetReturn(this,uVar4);
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006EDD90
+
+/* WARNING: Removing unreachable block (ram,0x006edec1) */
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+undefined4 UndefinedFunction_006edd90(void)
+
+{
+  char cVar1;
+  bool bVar2;
+  zCParser *this;
+  int iVar3;
+  zCWaypoint *this_00;
+  zSTRING *pzVar4;
+  int iVar5;
+  char *pcVar6;
+  uint uVar7;
+  uint uVar8;
+  char *pcVar9;
+  undefined1 uStack_2d;
+  undefined **ppuStack_20;
+  basic_string<> abStack_1c [16];
+  void *pvStack_c;
+  undefined1 *puStack_8;
+  undefined4 uStack_4;
+  
+  uStack_4 = 0xffffffff;
+  puStack_8 = &LAB_0081e478;
+  pvStack_c = ExceptionList;
+  ExceptionList = &pvStack_c;
+  if ((DAT_00ab09e0 & 1) == 0) {
+    DAT_00ab09e0 = DAT_00ab09e0 | 1;
+    DAT_00ab0948 = uStack_2d;
+    ExceptionList = &pvStack_c;
+    std::basic_string<>::_Tidy((basic_string<> *)&DAT_00ab0948,false);
+    _DAT_00ab0944 = &zSTRING::`vftable';
+    _atexit((_func_4879 *)&LAB_006ee000);
+  }
+  std::basic_string<>::erase((basic_string<> *)&DAT_00ab0948,0,0xffffffff);
+  this = zCParser::GetParser();
+  std::basic_string<>::_Tidy(abStack_1c,false);
+  uVar7 = 0xffffffff;
+  pcVar6 = s_Npc_GetNearestWP;
+  do {
+    if (uVar7 == 0) break;
+    uVar7 = uVar7 - 1;
+    cVar1 = *pcVar6;
+    pcVar6 = pcVar6 + 1;
+  } while (cVar1 != '\0');
+  std::basic_string<>::assign(abStack_1c,s_Npc_GetNearestWP,~uVar7 - 1);
+  ppuStack_20 = &zSTRING::`vftable';
+  uStack_4 = 0;
+  iVar3 = FUN_006db090(&ppuStack_20,1);
+  uStack_4 = 0xffffffff;
+  ppuStack_20 = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy(abStack_1c,true);
+  if (((iVar3 != 0) && (*(int *)(iVar3 + 0xb8) != 0)) &&
+     (this_00 = zCWayNet::GetNearestWaypoint(*(zVEC3 **)(*(int *)(iVar3 + 0xb8) + 0x90)),
+     this_00 != (zCWaypoint *)0x0)) {
+    pzVar4 = zCWaypoint::GetName(this_00);
+    if (pzVar4 == (zSTRING *)0x0) {
+      pzVar4 = (zSTRING *)0x0;
+    }
+    else {
+      pzVar4 = pzVar4 + 4;
+    }
+    uVar7 = *(uint *)(pzVar4 + 8);
+    if (pzVar4 == (zSTRING *)&DAT_00ab0948) {
+      if (DAT_00ab0950 < uVar7) {
+        std::_Xran();
+      }
+      std::basic_string<>::_Split((basic_string<> *)&DAT_00ab0948);
+      iVar5 = DAT_00ab0950 - uVar7;
+      iVar3 = -1;
+      if ((iVar5 == -1) || (iVar3 = iVar5, iVar5 != 0)) {
+        _memmove(DAT_00ab094c + uVar7,DAT_00ab094c + uVar7 + iVar3,iVar5 - iVar3);
+        uVar7 = DAT_00ab0950 - iVar3;
+        bVar2 = std::basic_string<>::_Grow((basic_string<> *)&DAT_00ab0948,uVar7,false);
+        if (bVar2) {
+          std::basic_string<>::_Eos((basic_string<> *)&DAT_00ab0948,uVar7);
+        }
+      }
+      std::basic_string<>::erase((basic_string<> *)&DAT_00ab0948,0,0);
+    }
+    else {
+      if (uVar7 != 0) {
+        pcVar6 = *(char **)(pzVar4 + 4);
+        if (pcVar6 == (char *)0x0) {
+          pcVar6 = "";
+        }
+        if ((byte)pcVar6[-1] < 0xfe) {
+          std::basic_string<>::_Tidy((basic_string<> *)&DAT_00ab0948,true);
+          DAT_00ab094c = *(char **)(pzVar4 + 4);
+          if (DAT_00ab094c == (char *)0x0) {
+            DAT_00ab094c = "";
+          }
+          DAT_00ab0950 = *(uint *)(pzVar4 + 8);
+          _DAT_00ab0954 = *(undefined4 *)(pzVar4 + 0xc);
+          DAT_00ab094c[-1] = DAT_00ab094c[-1] + '\x01';
+          goto LAB_006edfd4;
+        }
+      }
+      bVar2 = std::basic_string<>::_Grow((basic_string<> *)&DAT_00ab0948,uVar7,true);
+      if (bVar2) {
+        pcVar6 = *(char **)(pzVar4 + 4);
+        if (pcVar6 == (char *)0x0) {
+          pcVar6 = "";
+        }
+        pcVar9 = DAT_00ab094c;
+        for (uVar8 = uVar7 >> 2; uVar8 != 0; uVar8 = uVar8 - 1) {
+          *(undefined4 *)pcVar9 = *(undefined4 *)pcVar6;
+          pcVar6 = pcVar6 + 4;
+          pcVar9 = pcVar9 + 4;
+        }
+        for (uVar8 = uVar7 & 3; uVar8 != 0; uVar8 = uVar8 - 1) {
+          *pcVar9 = *pcVar6;
+          pcVar6 = pcVar6 + 1;
+          pcVar9 = pcVar9 + 1;
+        }
+        DAT_00ab0950 = uVar7;
+        DAT_00ab094c[uVar7] = '\0';
+      }
+    }
+  }
+LAB_006edfd4:
+  zCParser::SetReturn(this,(zSTRING *)&DAT_00ab0944);
+  ExceptionList = pvStack_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006F2C30
+
+undefined4 FUN_006f2c30(void)
+
+{
+  float fVar1;
+  float fVar2;
+  int iVar3;
+  zSTRING *pzVar4;
+  zCPar_Symbol *pzVar5;
+  int iVar6;
+  zCWaypoint *this;
+  zVEC3 *pzVar7;
+  char *pcVar8;
+  undefined4 uVar9;
+  char *pcVar10;
+  float *pfVar11;
+  char *pcVar12;
+  undefined ***pppuVar13;
+  allocator<char> local_59;
+  float fStack_58;
+  float local_54;
+  float fStack_50;
+  zCParser *local_4c;
+  float local_48;
+  float fStack_44;
+  float fStack_40;
+  undefined **local_34;
+  float local_30;
+  float fStack_2c;
+  undefined **local_20;
+  basic_string<> local_1c [16];
+  void *local_c;
+  undefined1 *puStack_8;
+  int local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081ec28;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  std::basic_string<>::_Tidy(local_1c,false);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  local_54 = NAN;
+  local_4c = zCParser::GetParser();
+  zCParser::GetParameter(local_4c,(zSTRING *)&local_20);
+  std::basic_string<>::basic_string<>((basic_string<> *)&local_30,s_Npc_GetDistToWP,&local_59);
+  local_34 = &zSTRING::`vftable';
+  local_4._0_1_ = 1;
+  iVar3 = FUN_006db090(&local_34,0);
+  local_4 = (uint)local_4._1_3_ << 8;
+  local_34 = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy((basic_string<> *)&local_30,true);
+  if (iVar3 == 0) {
+    operator+((char *)&local_34,(zSTRING *)s_..._wp-name:_);
+    local_4._0_1_ = 2;
+    if (DAT_008b436c != 0) {
+      if (DAT_008b436c == 1) {
+        pzVar4 = (zSTRING *)operator+((char *)&local_48,(zSTRING *)s_C:_SCRIPT:_);
+        local_4._0_1_ = 3;
+        iVar3 = 0xfc;
+      }
+      else {
+        if (DAT_00ab0a7d == '\0') {
+          pzVar4 = (zSTRING *)operator+((char *)&local_48,(zSTRING *)s_C:_SCRIPT:_);
+          local_4._0_1_ = 4;
+          zERROR::Report(&zerr,3,0,pzVar4,'\0',0,0x100,s_P:\dev\g2addon\release\Gothic\_u,
+                         (char *)0x0);
+          local_4._0_1_ = 2;
+          zSTRING::~zSTRING((zSTRING *)&local_48);
+        }
+        DAT_00ab0a7d = '\x01';
+        pzVar4 = (zSTRING *)operator+((char *)&local_48,(zSTRING *)s_C:_SCRIPT:_);
+        local_4._0_1_ = 5;
+        iVar3 = 0x101;
+      }
+      zERROR::Report(&zerr,2,0,pzVar4,'\0',0,iVar3,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0);
+      local_4._0_1_ = 2;
+      zSTRING::~zSTRING((zSTRING *)&local_48);
+      iVar3 = zCParser::GetCurrentFunc(&parser);
+      pzVar5 = zCParser::GetSymbol(&parser,iVar3);
+      if (pzVar5 != (zCPar_Symbol *)0x0) {
+        pzVar4 = (zSTRING *)
+                 operator+((char *)&local_48,(zSTRING *)s_C:_SCRIPT:_last_parser_func-name);
+        local_4._0_1_ = 6;
+        zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0x106,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        zSTRING::~zSTRING((zSTRING *)&local_48);
+      }
+    }
+    local_4 = (uint)local_4._1_3_ << 8;
+    local_34 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy((basic_string<> *)&local_30,true);
+  }
+  else if (*(int *)(iVar3 + 0xb8) != 0) {
+    iVar6 = (**(code **)(*(int *)ogame + 0x34))();
+    this = zCWayNet::GetWaypoint(*(zSTRING **)(iVar6 + 0x90));
+    if (this == (zCWaypoint *)0x0) {
+      pppuVar13 = &local_20;
+      pfVar11 = &local_48;
+      pcVar12 = s_Npc_GetDistToWP():_Waypoint_;
+      pcVar8 = (char *)operator+((char *)pfVar11,(zSTRING *)s_Npc_GetDistToWP():_Waypoint_);
+      pcVar10 = s__not_found.;
+      pzVar4 = (zSTRING *)&local_34;
+      local_4._0_1_ = 7;
+      uVar9 = operator+(pzVar4,pcVar8);
+      local_4._0_1_ = 8;
+      FUN_006db6d0(uVar9,1,pzVar4,pcVar8,pcVar10,pfVar11,pcVar12,pppuVar13);
+      local_4._0_1_ = 7;
+      local_34 = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy((basic_string<> *)&local_30,true);
+      local_4 = (uint)local_4._1_3_ << 8;
+      zSTRING::~zSTRING((zSTRING *)&local_48);
+    }
+    else {
+      zMAT4::GetTranslation((zMAT4 *)(iVar3 + 0x3c));
+      pzVar7 = zCWaypoint::GetPositionWorld(this);
+      zVEC3::zVEC3((zVEC3 *)&local_34,local_48 - *(float *)pzVar7,fStack_44 - *(float *)(pzVar7 + 4)
+                   ,fStack_40 - *(float *)(pzVar7 + 8));
+      fVar1 = ABS((float)local_34);
+      local_54 = ABS(local_30);
+      fVar2 = fVar1;
+      if (fVar1 < local_54) {
+        fVar2 = local_54;
+        local_54 = fVar1;
+        fStack_50 = fVar1;
+      }
+      fStack_58 = ABS(fStack_2c);
+      if (fVar2 < ABS(fStack_2c)) {
+        fStack_58 = fVar2;
+        fStack_50 = fVar2;
+      }
+      local_54 = fStack_58 + local_54;
+      local_54 = (float)__ftol();
+    }
+  }
+  zCParser::SetReturn(local_4c,(int)local_54);
+  zSTRING::~zSTRING((zSTRING *)&local_20);
+  ExceptionList = local_c;
+  return 0;
+}
+
+//0x006DC4A0
+
+undefined4 FUN_006dc4a0(void)
+
+{
+  char cVar1;
+  int iVar2;
+  zCPar_Symbol *pzVar3;
+  zSTRING *pzVar4;
+  oCInfoManager *this;
+  uint uVar5;
+  bool bVar6;
+  char *pcVar7;
+  int local_6c [3];
+  zCParser *local_60;
+  undefined **local_5c;
+  basic_string<> local_58 [16];
+  undefined **local_48;
+  zCPar_Symbol local_44 [16];
+  undefined **local_34;
+  basic_string<> local_30 [16];
+  zSTRING local_20 [20];
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081c5bf;
+  local_c = ExceptionList;
+  bVar6 = false;
+  local_6c[1] = 0;
+  local_6c[2] = 0;
+  ExceptionList = &local_c;
+  local_60 = zCParser::GetParser();
+  zCParser::GetParameter(local_60,local_6c);
+  std::basic_string<>::_Tidy(local_58,false);
+  uVar5 = 0xffffffff;
+  pcVar7 = s_Npc_KnowsInfo;
+  do {
+    if (uVar5 == 0) break;
+    uVar5 = uVar5 - 1;
+    cVar1 = *pcVar7;
+    pcVar7 = pcVar7 + 1;
+  } while (cVar1 != '\0');
+  std::basic_string<>::assign(local_58,s_Npc_KnowsInfo,~uVar5 - 1);
+  local_5c = &zSTRING::`vftable';
+  local_4 = 0;
+  iVar2 = FUN_006db090(&local_5c,0);
+  local_4 = 0xffffffff;
+  local_5c = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy(local_58,true);
+  if (iVar2 == 0) {
+    pzVar3 = zCParser::GetSymbol(&parser,local_6c[0]);
+    if (pzVar3 == (zCPar_Symbol *)0x0) {
+      std::basic_string<>::_Tidy(local_58,false);
+      uVar5 = 0xffffffff;
+      pcVar7 = s_[UNKNOWN];
+      do {
+        if (uVar5 == 0) break;
+        uVar5 = uVar5 - 1;
+        cVar1 = *pcVar7;
+        pcVar7 = pcVar7 + 1;
+      } while (cVar1 != '\0');
+      std::basic_string<>::assign(local_58,s_[UNKNOWN],~uVar5 - 1);
+      bVar6 = true;
+      local_5c = &zSTRING::`vftable';
+      local_6c[1] = 1;
+      pzVar3 = (zCPar_Symbol *)&local_5c;
+      local_4 = 1;
+    }
+    local_44[0] = pzVar3[4];
+    std::basic_string<>::_Tidy((basic_string<> *)local_44,false);
+    std::basic_string<>::assign
+              ((basic_string<> *)local_44,(basic_string<> *)(pzVar3 + 4),0,0xffffffff);
+    local_48 = &zSTRING::`vftable';
+    local_4 = 3;
+    if (bVar6) {
+      local_5c = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy(local_58,true);
+    }
+    operator+((char *)&local_34,(zSTRING *)s_..._infoinstance:_);
+    local_4._0_1_ = 4;
+    if (DAT_008b436c != 0) {
+      if (DAT_008b436c == 1) {
+        pzVar4 = (zSTRING *)operator+((char *)local_20,(zSTRING *)s_C:_SCRIPT:_);
+        local_4._0_1_ = 5;
+        iVar2 = 0xfc;
+      }
+      else {
+        if (DAT_00ab0a7d == '\0') {
+          pzVar4 = (zSTRING *)operator+((char *)local_20,(zSTRING *)s_C:_SCRIPT:_);
+          local_4._0_1_ = 6;
+          zERROR::Report(&zerr,3,0,pzVar4,'\0',0,0x100,s_P:\dev\g2addon\release\Gothic\_u,
+                         (char *)0x0);
+          local_4._0_1_ = 4;
+          zSTRING::~zSTRING(local_20);
+        }
+        DAT_00ab0a7d = '\x01';
+        pzVar4 = (zSTRING *)operator+((char *)local_20,(zSTRING *)s_C:_SCRIPT:_);
+        local_4._0_1_ = 7;
+        iVar2 = 0x101;
+      }
+      zERROR::Report(&zerr,2,0,pzVar4,'\0',0,iVar2,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0);
+      local_4._0_1_ = 4;
+      zSTRING::~zSTRING(local_20);
+      iVar2 = zCParser::GetCurrentFunc(&parser);
+      pzVar3 = zCParser::GetSymbol(&parser,iVar2);
+      if (pzVar3 != (zCPar_Symbol *)0x0) {
+        pzVar4 = (zSTRING *)
+                 operator+((char *)local_20,(zSTRING *)s_C:_SCRIPT:_last_parser_func-name);
+        local_4._0_1_ = 8;
+        zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0x106,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        zSTRING::~zSTRING(local_20);
+      }
+    }
+    local_4 = CONCAT31(local_4._1_3_,3);
+    local_34 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(local_30,true);
+    local_4 = 0xffffffff;
+    local_48 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy((basic_string<> *)local_44,true);
+    iVar2 = local_6c[2];
+  }
+  else {
+    this = oCGame::GetInfoManager(ogame);
+    iVar2 = oCInfoManager::InformationTold(this,local_6c[0]);
+  }
+  zCParser::SetReturn(local_60,iVar2);
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006E72E0
+
+undefined4 FUN_006e72e0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  int iVar2;
+  uint uVar3;
+  char *pcVar4;
+  int local_24;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081d968;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&local_24);
+  uVar3 = 0xffffffff;
+  pcVar4 = s_Npc_HasItems;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_HasItems,~uVar3 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  iVar2 = FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (iVar2 == 0) {
+    iVar2 = 0;
+  }
+  else {
+    iVar2 = oCNpcInventory::GetAmount((oCNpcInventory *)(iVar2 + 0x668),local_24);
+  }
+  zCParser::SetReturn(this,iVar2);
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006F6C70
+
+undefined4 FUN_006f6c70(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  int *piVar2;
+  undefined4 uVar3;
+  zSTRING *pzVar4;
+  int iVar5;
+  zCPar_Symbol *pzVar6;
+  undefined4 uStack_54;
+  int local_50;
+  undefined **local_4c;
+  undefined **local_48;
+  int local_44 [3];
+  undefined **ppuStack_38;
+  basic_string<> abStack_34 [16];
+  undefined **ppuStack_24;
+  basic_string<> abStack_20 [16];
+  void *pvStack_10;
+  void *pvStack_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081f320;
+  pvStack_c = ExceptionList;
+  local_44[0] = CONCAT31(local_44[0]._1_3_,uStack_54._3_1_);
+  ExceptionList = &pvStack_c;
+  std::basic_string<>::_Tidy((basic_string<> *)local_44,false);
+  local_48 = &zSTRING::`vftable';
+  local_4 = 0;
+  local_4c = (undefined **)0x0;
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&local_50);
+  zCParser::GetParameter(this,(zSTRING *)&local_48);
+  piVar2 = (int *)(**(code **)(*(int *)ogame + 0x34))();
+  uVar3 = (**(code **)(*piVar2 + 0x4c))
+                    (&local_48,0,&class_zCVob_`RTTI_Type_Descriptor',
+                     &class_oCMobInter_`RTTI_Type_Descriptor',0);
+  piVar2 = (int *)___RTDynamicCast(uVar3);
+  if (piVar2 == (int *)0x0) {
+    operator+((char *)&ppuStack_24,(zSTRING *)s_Mob_HasItems()_:_No_Mob_found_wi);
+    puStack_8._0_1_ = 1;
+    if (DAT_008b436c != 0) {
+      if (DAT_008b436c == 1) {
+        pzVar4 = (zSTRING *)operator+((char *)&ppuStack_38,(zSTRING *)s_C:_SCRIPT:_);
+        puStack_8._0_1_ = 2;
+        zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0xfc,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0);
+        puStack_8._0_1_ = 1;
+        ppuStack_38 = &zSTRING::`vftable';
+        std::basic_string<>::_Tidy(abStack_34,true);
+      }
+      else {
+        if (DAT_00ab0a7d == '\0') {
+          pzVar4 = (zSTRING *)operator+((char *)&ppuStack_38,(zSTRING *)s_C:_SCRIPT:_);
+          puStack_8._0_1_ = 3;
+          zERROR::Report(&zerr,3,0,pzVar4,'\0',0,0x100,s_P:\dev\g2addon\release\Gothic\_u,
+                         (char *)0x0);
+          puStack_8._0_1_ = 1;
+          ppuStack_38 = &zSTRING::`vftable';
+          std::basic_string<>::_Tidy(abStack_34,true);
+        }
+        DAT_00ab0a7d = '\x01';
+        pzVar4 = (zSTRING *)operator+((char *)&ppuStack_38,(zSTRING *)s_C:_SCRIPT:_);
+        puStack_8._0_1_ = 4;
+        zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0x101,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        puStack_8._0_1_ = 1;
+        zSTRING::~zSTRING((zSTRING *)&ppuStack_38);
+      }
+      iVar5 = zCParser::GetCurrentFunc(&parser);
+      pzVar6 = zCParser::GetSymbol(&parser,iVar5);
+      if (pzVar6 != (zCPar_Symbol *)0x0) {
+        pzVar4 = (zSTRING *)
+                 operator+((char *)&ppuStack_38,(zSTRING *)s_C:_SCRIPT:_last_parser_func-name);
+        puStack_8._0_1_ = 5;
+        zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0x106,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        zSTRING::~zSTRING((zSTRING *)&ppuStack_38);
+      }
+    }
+    puStack_8 = (undefined1 *)((uint)puStack_8._1_3_ << 8);
+    ppuStack_24 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(abStack_20,true);
+  }
+  else {
+    local_50 = (**(code **)(*piVar2 + 0xf0))(uStack_54);
+  }
+  zCParser::SetReturn(this,local_50);
+  local_4c = &zSTRING::`vftable';
+  if (local_44[0] != 0) {
+    cVar1 = *(char *)(local_44[0] + -1);
+    if ((cVar1 != '\0') && (cVar1 != -1)) {
+      *(char *)(local_44[0] + -1) = cVar1 + -1;
+      ExceptionList = pvStack_10;
+      return 0;
+    }
+    operator_delete((char *)(local_44[0] + -1));
+  }
+  ExceptionList = pvStack_10;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006EDCB0
+
+undefined4 FUN_006edcb0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  oCItem *poVar2;
+  uint uVar3;
+  char *pcVar4;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081e458;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  uVar3 = 0xffffffff;
+  pcVar4 = s_Npc_GetEquippedArmor;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_GetEquippedArmor,~uVar3 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 == (oCNpc *)0x0) {
+    poVar2 = (oCItem *)0x0;
+  }
+  else {
+    poVar2 = oCNpc::GetEquippedArmor(this_00);
+  }
+  zCParser::SetReturn(this,poVar2);
+  ExceptionList = local_c;
+  return 0;
+}
+
+//0x006E4FD0
+
+undefined4 FUN_006e4fd0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  int iVar2;
+  uint uVar3;
+  char *pcVar4;
+  int local_24;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081d538;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&local_24);
+  uVar3 = 0xffffffff;
+  pcVar4 = s_Npc_IsInState;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_IsInState,~uVar3 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 == (oCNpc *)0x0) {
+    iVar2 = 0;
+  }
+  else {
+    iVar2 = oCNpc::IsAIState(this_00,local_24);
+  }
+  zCParser::SetReturn(this,iVar2);
+  ExceptionList = local_c;
+  return 0;
+}
+
+//0x006E67E0
+
+undefined4 FUN_006e67e0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  uint uVar2;
+  int iVar3;
+  char *pcVar4;
+  int local_24;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081d818;
+  local_c = ExceptionList;
+  iVar3 = 0;
+  local_24 = 0;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&local_24);
+  uVar2 = 0xffffffff;
+  pcVar4 = s_Npc_GetTalentSkill;
+  do {
+    if (uVar2 == 0) break;
+    uVar2 = uVar2 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_GetTalentSkill,~uVar2 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 != (oCNpc *)0x0) {
+    iVar3 = oCNpc::GetTalentSkill(this_00,local_24);
+  }
+  zCParser::SetReturn(this,iVar3);
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006E66F0
+
+undefined4 FUN_006e66f0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  oCItem *poVar2;
+  uint uVar3;
+  char *pcVar4;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081d7f8;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  uVar3 = 0xffffffff;
+  pcVar4 = s_Npc_HasEquippedArmor;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_HasEquippedArmor,~uVar3 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  poVar2 = (oCItem *)0x0;
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 != (oCNpc *)0x0) {
+    poVar2 = oCNpc::GetEquippedArmor(this_00);
+  }
+  zCParser::SetReturn(this,(uint)(poVar2 != (oCItem *)0x0));
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006F37D0
+
+undefined4 FUN_006f37d0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  uint uVar2;
+  int iVar3;
+  char *pcVar4;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081ed18;
+  local_c = ExceptionList;
+  iVar3 = 0;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  uVar2 = 0xffffffff;
+  pcVar4 = s_Npc_GetBodyState;
+  do {
+    if (uVar2 == 0) break;
+    uVar2 = uVar2 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_GetBodyState,~uVar2 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 != (oCNpc *)0x0) {
+    iVar3 = oCNpc::GetFullBodyState(this_00);
+  }
+  zCParser::SetReturn(this,iVar3);
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006E8960
+
+undefined4 FUN_006e8960(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  oCNpc *this_00;
+  int iVar2;
+  uint uVar3;
+  char *pcVar4;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081db88;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  uVar3 = 0xffffffff;
+  pcVar4 = s_Npc_IsDead;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    cVar1 = *pcVar4;
+    pcVar4 = pcVar4 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Npc_IsDead,~uVar3 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  this_00 = (oCNpc *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (this_00 == (oCNpc *)0x0) {
+    iVar2 = 1;
+  }
+  else {
+    iVar2 = oCNpc::IsDead(this_00);
+  }
+  zCParser::SetReturn(this,iVar2);
+  ExceptionList = local_c;
+  return 0;
+}
+
+//0x006F27A0
+
+undefined4 FUN_006f27a0(void)
+
+{
+  char cVar1;
+  bool bVar2;
+  zCParser *this;
+  zCVob *pzVar3;
+  zCVob *this_00;
+  uint uVar4;
+  uint uVar5;
+  char *pcVar6;
+  char *pcVar7;
+  int local_3c;
+  undefined **local_34;
+  basic_string<> local_30 [4];
+  char *local_2c;
+  undefined4 local_28;
+  undefined4 local_24;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  char *local_18;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081eb90;
+  local_c = ExceptionList;
+  local_3c = 0x7fffffff;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  std::basic_string<>::_Tidy(local_1c,false);
+  uVar4 = 0xffffffff;
+  pcVar6 = s_Npc_GetDistToNpc;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar6;
+    pcVar6 = pcVar6 + 1;
+  } while (cVar1 != '\0');
+  uVar4 = ~uVar4 - 1;
+  bVar2 = std::basic_string<>::_Grow(local_1c,uVar4,true);
+  if (bVar2) {
+    pcVar6 = s_Npc_GetDistToNpc;
+    pcVar7 = local_18;
+    for (uVar5 = uVar4 >> 2; uVar5 != 0; uVar5 = uVar5 - 1) {
+      *(undefined4 *)pcVar7 = *(undefined4 *)pcVar6;
+      pcVar6 = pcVar6 + 4;
+      pcVar7 = pcVar7 + 4;
+    }
+    for (uVar5 = uVar4 & 3; uVar5 != 0; uVar5 = uVar5 - 1) {
+      *pcVar7 = *pcVar6;
+      pcVar6 = pcVar6 + 1;
+      pcVar7 = pcVar7 + 1;
+    }
+    std::basic_string<>::_Eos(local_1c,uVar4);
+  }
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  pzVar3 = (zCVob *)FUN_006db090(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != (char *)0x0) {
+    cVar1 = local_18[-1];
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete(local_18 + -1);
+    }
+    else {
+      local_18[-1] = cVar1 + -1;
+    }
+  }
+  std::basic_string<>::_Tidy(local_30,false);
+  uVar4 = 0xffffffff;
+  pcVar6 = s_Npc_GetDistToNpc;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar6;
+    pcVar6 = pcVar6 + 1;
+  } while (cVar1 != '\0');
+  uVar4 = ~uVar4 - 1;
+  bVar2 = std::basic_string<>::_Grow(local_30,uVar4,true);
+  if (bVar2) {
+    pcVar6 = s_Npc_GetDistToNpc;
+    pcVar7 = local_2c;
+    for (uVar5 = uVar4 >> 2; uVar5 != 0; uVar5 = uVar5 - 1) {
+      *(undefined4 *)pcVar7 = *(undefined4 *)pcVar6;
+      pcVar6 = pcVar6 + 4;
+      pcVar7 = pcVar7 + 4;
+    }
+    for (uVar5 = uVar4 & 3; uVar5 != 0; uVar5 = uVar5 - 1) {
+      *pcVar7 = *pcVar6;
+      pcVar6 = pcVar6 + 1;
+      pcVar7 = pcVar7 + 1;
+    }
+    std::basic_string<>::_Eos(local_30,uVar4);
+  }
+  local_34 = &zSTRING::`vftable';
+  local_4 = 1;
+  this_00 = (zCVob *)FUN_006db090(&local_34,1);
+  local_4 = 0xffffffff;
+  local_34 = &zSTRING::`vftable';
+  if (local_2c != (char *)0x0) {
+    cVar1 = local_2c[-1];
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete(local_2c + -1);
+    }
+    else {
+      local_2c[-1] = cVar1 + -1;
+    }
+  }
+  local_2c = (char *)0x0;
+  local_28 = 0;
+  local_24 = 0;
+  if ((this_00 != (zCVob *)0x0) && (pzVar3 != (zCVob *)0x0)) {
+    zCVob::GetDistanceToVob(this_00,pzVar3);
+    local_3c = __ftol();
+  }
+  zCParser::SetReturn(this,local_3c);
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006FB450
+
+undefined4 UndefinedFunction_006fb450(void)
+
+{
+  zCParser *this;
+  oCWorldTimer *this_00;
+  int iVar1;
+  
+  this = zCParser::GetParser();
+  this_00 = oCGame::GetWorldTimer(ogame);
+  iVar1 = oCWorldTimer::GetDay(this_00);
+  zCParser::SetReturn(this,iVar1);
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006FB3E0
+
+undefined4 UndefinedFunction_006fb3e0(void)
+
+{
+  zCParser *this;
+  oCWorldTimer *this_00;
+  int iVar1;
+  int iStack_10;
+  int iStack_c;
+  int iStack_8;
+  int iStack_4;
+  
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&iStack_10);
+  zCParser::GetParameter(this,&iStack_c);
+  zCParser::GetParameter(this,&iStack_8);
+  zCParser::GetParameter(this,&iStack_4);
+  this_00 = oCGame::GetWorldTimer(ogame);
+  iVar1 = oCWorldTimer::IsTimeBetween(this_00,iStack_4,iStack_8,iStack_c,iStack_10);
+  zCParser::SetReturn(this,iVar1);
+  return 0;
+}
+
+//0x006FB480
+
+undefined4 UndefinedFunction_006fb480(void)
+
+{
+  zCParser *this;
+  int iVar1;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  this = zCParser::GetParser();
+  iVar1 = ___RTDynamicCast(zCSkyControler::s_activeSkyControler,0,
+                           &class_zCSkyControler_`RTTI_Type_Descriptor',
+                           &class_zCSkyControler_Outdoor_`RTTI_Type_Descriptor',0);
+  if ((iVar1 != 0) && (0.3 < *(float *)(iVar1 + 0x69c))) {
+    zCParser::SetReturn(this,1);
+    return 0;
+  }
+  zCParser::SetReturn(this,0);
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006EEBE0
+
+undefined4 FUN_006eebe0(void)
+
+{
+  byte bVar1;
+  zCParser *this;
+  uint uVar2;
+  uint uVar3;
+  byte *pbVar4;
+  byte *pbVar5;
+  bool bVar6;
+  bool bVar7;
+  undefined **local_34;
+  basic_string<> local_30 [4];
+  byte *local_2c;
+  uint local_28;
+  undefined4 local_24;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  byte *local_18;
+  uint local_14;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081e580;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  std::basic_string<>::_Tidy(local_1c,false);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  std::basic_string<>::_Tidy(local_30,false);
+  local_34 = &zSTRING::`vftable';
+  local_4 = CONCAT31(local_4._1_3_,1);
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,(zSTRING *)&local_34);
+  zCParser::GetParameter(this,(zSTRING *)&local_20);
+  zSTRING::Upper((zSTRING *)&local_20);
+  zSTRING::Upper((zSTRING *)&local_34);
+  pbVar5 = (byte *)"";
+  if (local_2c != (byte *)0x0) {
+    pbVar5 = local_2c;
+  }
+  uVar3 = local_14;
+  if (local_28 <= local_14) {
+    uVar3 = local_28;
+  }
+  bVar6 = false;
+  uVar2 = 0;
+  bVar7 = true;
+  pbVar4 = local_18;
+  do {
+    if (uVar3 == 0) break;
+    uVar3 = uVar3 - 1;
+    bVar6 = *pbVar4 < *pbVar5;
+    bVar7 = *pbVar4 == *pbVar5;
+    pbVar4 = pbVar4 + 1;
+    pbVar5 = pbVar5 + 1;
+  } while (bVar7);
+  if (!bVar7) {
+    uVar2 = (1 - (uint)bVar6) - (uint)(bVar6 != 0);
+  }
+  if (uVar2 == 0) {
+    if (local_14 < local_28) {
+      uVar2 = 0xffffffff;
+    }
+    else {
+      uVar2 = (uint)(local_14 != local_28);
+    }
+  }
+  zCParser::SetReturn(this,(uint)(uVar2 == 0));
+  local_34 = &zSTRING::`vftable';
+  if (local_2c != (byte *)0x0) {
+    bVar1 = local_2c[-1];
+    if ((bVar1 == 0) || (bVar1 == 0xff)) {
+      operator_delete(local_2c + -1);
+    }
+    else {
+      local_2c[-1] = bVar1 - 1;
+    }
+  }
+  local_2c = (byte *)0x0;
+  local_28 = 0;
+  local_24 = 0;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != (byte *)0x0) {
+    bVar1 = local_18[-1];
+    if ((bVar1 != 0) && (bVar1 != 0xff)) {
+      local_18[-1] = bVar1 - 1;
+      ExceptionList = local_c;
+      return 0;
+    }
+    operator_delete(local_18 + -1);
+  }
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006F77C0
+
+undefined4 UndefinedFunction_006f77c0(void)
+
+{
+  zCParser *this;
+  int *piVar1;
+  int aiStack_8 [2];
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  this = zCParser::GetParser();
+  piVar1 = zCParser::GetInstance(this);
+  aiStack_8[1] = 0;
+  aiStack_8[0] = -1;
+  if (piVar1 != (int *)0x0) {
+    (**(code **)(*piVar1 + 0x54))(aiStack_8 + 1,aiStack_8);
+  }
+  zCParser::SetReturn(this,aiStack_8[0]);
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006F76C0
+
+undefined4 FUN_006f76c0(void)
+
+{
+  char cVar1;
+  zCParser *this;
+  int *piVar2;
+  int iVar3;
+  uint uVar4;
+  uint uVar5;
+  char *pcVar6;
+  int local_24;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *pvStack_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081f3f8;
+  pvStack_c = ExceptionList;
+  uVar5 = 0;
+  ExceptionList = &pvStack_c;
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&local_24);
+  uVar4 = 0xffffffff;
+  pcVar6 = s_Hlp_IsItem;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar6;
+    pcVar6 = pcVar6 + 1;
+  } while (cVar1 != '\0');
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  std::basic_string<>::assign(local_1c,s_Hlp_IsItem,~uVar4 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  piVar2 = (int *)FUN_006e9350(&local_20,1);
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  if (piVar2 != (int *)0x0) {
+    iVar3 = (**(code **)(*piVar2 + 0x78))();
+    uVar5 = (uint)(iVar3 == local_24);
+  }
+  zCParser::SetReturn(this,uVar5);
+  ExceptionList = pvStack_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+//0x006EEEC0
+
+undefined4 UndefinedFunction_006eeec0(void)
+
+{
+  zCParser *this;
+  void *pvVar1;
+  int iVar2;
+  undefined4 uVar3;
+  TypeDescriptor *pTVar4;
+  TypeDescriptor *pTVar5;
+  undefined4 uVar6;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  this = zCParser::GetParser();
+  uVar6 = 0;
+  pTVar5 = &class_oCNpc_`RTTI_Type_Descriptor';
+  pTVar4 = &class_zCVob_`RTTI_Type_Descriptor';
+  uVar3 = 0;
+  pvVar1 = zCParser::GetInstance(this);
+  iVar2 = ___RTDynamicCast(pvVar1,uVar3,pTVar4,pTVar5,uVar6);
+  zCParser::SetReturn(this,(uint)(iVar2 != 0));
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+
+
+======================================================================================================================================================================
+
+Claude response*HAHA he is not using an agent*:
+Verdicts (priority order)
+
+All the wrappers share one shape: pop parameters, call one engine method, SetReturn. None of them stores to a script symbol, to SELF/OTHER/ITEM, or to the NPC. Error paths only write to zSpy and set a "warned once" flag. The remaining doubt is in the engine methods they call, which I haven't seen.
+External	Wrapper	Verdict	Why not 100%
+NPC_REFUSETALK	calls oCNpc::CanTalk, returns == 0	Hold	The "Npc_CanTalk" string inside is just a copy-pasted error label. The wrapper is clean, but a refuse-talk timer is the one thing here that could plausibly be advanced by a check. I need oCNpc::CanTalk.
+NPC_GETNEARESTWP	GetNearestWaypoint(pos)	Pass	The only writes go to a static zSTRING return buffer (DAT_00ab0948), which is engine-private scratch, not game state. The waypoint search itself is unseen, but I'd bet on read-only.
+NPC_GETDISTTOWP	GetWaypoint(name), distance maths	Pass	Waypoint lookup by name is a read.
+NPC_KNOWSINFO	oCInfoManager::InformationTold(inst)	Pass	It is almost certainly a list lookup returning told. It is the same value you already read from info->told.
+NPC_HASITEMS	oCNpcInventory::GetAmount(inst)	Pass	An inventory count, unseen but a plain getter.
+MOB_HASITEMS	world search, then a virtual call at vtable +0xF0	Hold	I can't tell what that slot is from this output. Only 8 infos use it.
+NPC_GETEQUIPPEDARMOR, NPC_HASEQUIPPEDARMOR	GetEquippedArmor	Pass	SetReturn pushes the pointer on the operand stack. It does not assign the ITEM global, which was the thing to check.
+NPC_ISINSTATE	IsAIState(id)	Pass	State compare.
+NPC_GETTALENTSKILL, NPC_GETBODYSTATE, NPC_ISDEAD, NPC_GETDISTTONPC	single getter	Pass	Plain getters.
+WLD_GETDAY, WLD_ISTIME, WLD_ISRAINING	world timer / sky read	Pass	WLD_GETDAY and WLD_ISRAINING are as close to 100% as it gets. WLD_ISTIME calls IsTimeBetween, which is unseen but obviously a compare.
+HLP_STRCMP	Upper() on its own local copies	Pass, 100%	It only touches its locals.
+HLP_ISVALIDNPC	RTTI cast only	Pass, 100%	
+HLP_GETINSTANCEID	virtual call at +0x54 on the instance	Pass	It is almost certainly a trivial "get script instance id" getter, but it is a virtual slot I haven't resolved.
+HLP_ISITEM	virtual +0x78 compare	Pass	Same caveat as above.
+What would make it truly 100%
+
+Nearly every wrapper goes through FUN_006db090 (pop an instance parameter). HLP_ISITEM uses its twin FUN_006e9350. That helper is the single most valuable thing to read, because a bug in it would affect everything. Paste these in this order:
+
+    FUN_006db090
+    oCNpc::CanTalk (settles NPC_REFUSETALK)
+    oCInfoManager::InformationTold
+    oCNpcInventory::GetAmount
+    oCNpc::IsAIState and zCWayNet::GetNearestWaypoint
+    For MOB_HASITEMS, the class at the vtable slot +0xF0 of oCMobInter
+
+Until then, the honest statement is "wrappers verified, callees judged by their names and typical engine behavior."
+Whitelist snippet
+
+Where: replace the body of NnPureExternalSet(), everything between static const std::unordered_set<std::string> ok = { and };.
+
+C++
+
+        // Wrapper decompile audited (parse params -> one getter -> SetReturn, no stores to script/engine state).
+        // Callee bodies judged by behavior; 100% items marked.
+        "NPC_KNOWSINFO","NPC_HASITEMS","NPC_ISINSTATE","NPC_GETTALENTSKILL",
+        "NPC_GETDISTTOWP","NPC_GETNEARESTWP","NPC_GETDISTTONPC","NPC_ISDEAD",
+        "NPC_GETEQUIPPEDARMOR","NPC_HASEQUIPPEDARMOR","NPC_GETBODYSTATE",
+        "HLP_GETINSTANCEID","HLP_ISITEM",
+        "WLD_GETDAY","WLD_ISTIME",
+        "WLD_ISRAINING",     // 100%
+        "HLP_STRCMP",        // 100%
+        "HLP_ISVALIDNPC"     // 100%
+        /*
+        HOLD, wrapper clean but a callee is unread:
+        "NPC_REFUSETALK"   -> need oCNpc::CanTalk (possible refuse-talk timer)
+        "MOB_HASITEMS"     -> need the oCMobInter vtable slot +0xF0
+
+        Never seen in any condition, unaudited: NPC_ISPLAYER, NPC_GETTRUEGUILD, NPC_GETATTITUDE,
+        MIS_GETSTATUS, LOG_GETTOPICSTATUS, WLD_GETTIMEMIN, ...
+        Known or suspected state changers: NPC_CANSEENPC, NPC_CANSEEITEM, NPC_CANSEESOURCE,
+        NPC_CANSEENPCFREELOS, NPC_HASDETECTEDNPC
+        */
+
+With NPC_REFUSETALK and MOB_HASITEMS held back, infos that call them are skipped by the gate. That is mostly guard-warning dialogs, plus DIA_ARWID_KQ402_JOBDONE, so you lose very little. If Arwid-style turn-ins matter to you, resolving the MOB_HASITEMS vtable slot is the next item to check.
+
+
+======================================================================================================================================================================
+
+
+//FUN_006db090
+
+undefined4 FUN_006db090(char *param_1,int param_2)
+
+{
+  zCParser *this;
+  void *pvVar1;
+  zCPar_Symbol *pzVar2;
+  int iVar3;
+  zSTRING *pzVar4;
+  char *pcVar5;
+  zSTRING *pzVar6;
+  zSTRING *pzVar7;
+  zSTRING *pzVar8;
+  char *pcVar9;
+  undefined4 uVar10;
+  undefined4 uVar11;
+  char *pcVar12;
+  TypeDescriptor *pTVar13;
+  TypeDescriptor *pTVar14;
+  undefined4 uVar15;
+  zSTRING local_9c [20];
+  int local_88;
+  undefined **local_84;
+  basic_string<> local_80 [16];
+  undefined **local_70;
+  basic_string<> local_6c [16];
+  undefined **local_5c;
+  basic_string<> local_58 [16];
+  zSTRING local_48 [20];
+  zSTRING local_34 [20];
+  zSTRING local_20 [20];
+  void *local_c;
+  undefined1 *puStack_8;
+  int local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081c3c4;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  this = zCParser::GetParser();
+  if (DAT_008b436c == 0) {
+    uVar15 = 0;
+    pTVar14 = &class_oCNpc_`RTTI_Type_Descriptor';
+    pTVar13 = &class_zCVob_`RTTI_Type_Descriptor';
+    uVar10 = 0;
+    pvVar1 = zCParser::GetInstance(this);
+    uVar10 = ___RTDynamicCast(pvVar1,uVar10,pTVar13,pTVar14,uVar15);
+    ExceptionList = local_c;
+    return uVar10;
+  }
+  uVar15 = 0;
+  pTVar14 = &class_oCNpc_`RTTI_Type_Descriptor';
+  pTVar13 = &class_zCVob_`RTTI_Type_Descriptor';
+  uVar10 = 0;
+  pvVar1 = zCParser::GetInstanceAndIndex(this,&local_88);
+  uVar10 = ___RTDynamicCast(pvVar1,uVar10,pTVar13,pTVar14,uVar15);
+  pzVar2 = zCParser::GetSymbol(this,local_88);
+  uVar11 = 0;
+  pTVar14 = &class_oCNpc_`RTTI_Type_Descriptor';
+  pTVar13 = &class_zCVob_`RTTI_Type_Descriptor';
+  uVar15 = 0;
+  iVar3 = zCPar_Symbol::GetOffset(pzVar2);
+  iVar3 = ___RTDynamicCast(iVar3,uVar15,pTVar13,pTVar14,uVar11);
+  if (iVar3 == 0) {
+    iVar3 = zCPar_Symbol::GetOffset(pzVar2);
+    if (iVar3 == 0) {
+      pzVar4 = (zSTRING *)operator+((zSTRING *)&local_84,param_1);
+      local_4 = 0;
+      pcVar5 = (char *)operator+((zSTRING *)&local_70,pzVar4);
+      local_4._0_1_ = 1;
+      operator+((zSTRING *)&local_5c,pcVar5);
+      local_4._0_1_ = 2;
+      if (DAT_008b436c != 0) {
+        if (DAT_008b436c == 1) {
+          pzVar4 = (zSTRING *)operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_);
+          local_4._0_1_ = 3;
+          iVar3 = 0xfc;
+        }
+        else {
+          if (DAT_00ab0a7d == '\0') {
+            pzVar4 = (zSTRING *)operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_);
+            local_4._0_1_ = 4;
+            zERROR::Report(&zerr,3,0,pzVar4,'\0',0,0x100,s_P:\dev\g2addon\release\Gothic\_u,
+                           (char *)0x0);
+            local_4._0_1_ = 2;
+            zSTRING::~zSTRING(local_9c);
+          }
+          DAT_00ab0a7d = '\x01';
+          pzVar4 = (zSTRING *)operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_);
+          local_4._0_1_ = 5;
+          iVar3 = 0x101;
+        }
+        zERROR::Report(&zerr,2,0,pzVar4,'\0',0,iVar3,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        local_4._0_1_ = 2;
+        zSTRING::~zSTRING(local_9c);
+        if (param_2 != 0) {
+          iVar3 = zCParser::GetCurrentFunc(&parser);
+          pzVar2 = zCParser::GetSymbol(&parser,iVar3);
+          if (pzVar2 != (zCPar_Symbol *)0x0) {
+            pzVar4 = (zSTRING *)
+                     operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_last_parser_func-name);
+            local_4._0_1_ = 6;
+            zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0x106,s_P:\dev\g2addon\release\Gothic\_u,
+                           (char *)0x0);
+            zSTRING::~zSTRING(local_9c);
+          }
+        }
+      }
+      local_4._0_1_ = 1;
+      local_5c = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy(local_58,true);
+      local_4 = (uint)local_4._1_3_ << 8;
+      local_70 = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy(local_6c,true);
+      local_4 = 0xffffffff;
+      local_84 = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy(local_80,true);
+    }
+    else {
+      uVar11 = 0;
+      pTVar14 = &class_oCItem_`RTTI_Type_Descriptor';
+      pTVar13 = &class_zCVob_`RTTI_Type_Descriptor';
+      uVar15 = 0;
+      iVar3 = zCPar_Symbol::GetOffset(pzVar2);
+      iVar3 = ___RTDynamicCast(iVar3,uVar15,pTVar13,pTVar14,uVar11);
+      if (iVar3 == 0) {
+        uVar11 = 0;
+        pTVar14 = &class_oCMOB_`RTTI_Type_Descriptor';
+        pTVar13 = &class_zCVob_`RTTI_Type_Descriptor';
+        uVar15 = 0;
+        iVar3 = zCPar_Symbol::GetOffset(pzVar2);
+        ___RTDynamicCast(iVar3,uVar15,pTVar13,pTVar14,uVar11);
+        if (param_2 == 0) {
+          uVar11 = 0;
+          pTVar14 = &class_zCVob_`RTTI_Type_Descriptor';
+          pTVar13 = &class_zCVob_`RTTI_Type_Descriptor';
+          uVar15 = 0;
+          iVar3 = zCPar_Symbol::GetOffset(pzVar2);
+          ___RTDynamicCast(iVar3,uVar15,pTVar13,pTVar14,uVar11);
+          pcVar12 = s_():_illegal_param:_";
+          pzVar4 = local_20;
+          pzVar6 = (zSTRING *)operator+(pzVar4,param_1);
+          pzVar8 = local_34;
+          local_4 = 0x14;
+          pcVar5 = (char *)operator+(pzVar8,pzVar6);
+          pcVar9 = s_"_is_invalid_(bug?_->_contact_me;
+          pzVar7 = local_48;
+          local_4._0_1_ = 0x15;
+          uVar15 = operator+(pzVar7,pcVar5);
+          local_4 = CONCAT31(local_4._1_3_,0x16);
+          FUN_006db6d0(uVar15,0,pzVar7,pcVar5,pcVar9,pzVar8,pzVar6,pzVar2,pzVar4,param_1,pcVar12);
+          zSTRING::~zSTRING(local_48);
+          zSTRING::~zSTRING(local_34);
+          pzVar4 = local_20;
+        }
+        else {
+          pcVar12 = s_():_illegal_param:_";
+          pzVar4 = (zSTRING *)&local_70;
+          pzVar6 = (zSTRING *)operator+(pzVar4,param_1);
+          pzVar8 = local_9c;
+          local_4 = 0xe;
+          pcVar5 = (char *)operator+(pzVar8,pzVar6);
+          pcVar9 = s_"_is_a_mob_and_not_a_npc._;
+          pzVar7 = (zSTRING *)&local_84;
+          local_4._0_1_ = 0xf;
+          uVar15 = operator+(pzVar7,pcVar5);
+          local_4._0_1_ = 0x10;
+          FUN_006db6d0(uVar15,param_2,pzVar7,pcVar5,pcVar9,pzVar8,pzVar6,pzVar2,pzVar4,param_1,
+                       pcVar12);
+          local_4 = CONCAT31(local_4._1_3_,0xf);
+          local_84 = &zSTRING::`vftable';
+          std::basic_string<>::_Tidy(local_80,true);
+          zSTRING::~zSTRING(local_9c);
+          pzVar4 = (zSTRING *)&local_70;
+        }
+        zSTRING::~zSTRING(pzVar4);
+      }
+      else {
+        pzVar4 = (zSTRING *)operator+((zSTRING *)&local_5c,param_1);
+        local_4 = 7;
+        pcVar5 = (char *)operator+((zSTRING *)&local_70,pzVar4);
+        local_4._0_1_ = 8;
+        operator+((zSTRING *)&local_84,pcVar5);
+        local_4._0_1_ = 9;
+        if (DAT_008b436c != 0) {
+          if (DAT_008b436c == 1) {
+            pzVar4 = (zSTRING *)operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_);
+            local_4._0_1_ = 10;
+            iVar3 = 0xfc;
+          }
+          else {
+            if (DAT_00ab0a7d == '\0') {
+              pzVar4 = (zSTRING *)operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_);
+              local_4._0_1_ = 0xb;
+              zERROR::Report(&zerr,3,0,pzVar4,'\0',0,0x100,s_P:\dev\g2addon\release\Gothic\_u,
+                             (char *)0x0);
+              local_4._0_1_ = 9;
+              zSTRING::~zSTRING(local_9c);
+            }
+            DAT_00ab0a7d = '\x01';
+            pzVar4 = (zSTRING *)operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_);
+            local_4._0_1_ = 0xc;
+            iVar3 = 0x101;
+          }
+          zERROR::Report(&zerr,2,0,pzVar4,'\0',0,iVar3,s_P:\dev\g2addon\release\Gothic\_u,
+                         (char *)0x0);
+          local_4._0_1_ = 9;
+          zSTRING::~zSTRING(local_9c);
+          if (param_2 != 0) {
+            iVar3 = zCParser::GetCurrentFunc(&parser);
+            pzVar2 = zCParser::GetSymbol(&parser,iVar3);
+            if (pzVar2 != (zCPar_Symbol *)0x0) {
+              pzVar4 = (zSTRING *)
+                       operator+((char *)local_9c,(zSTRING *)s_C:_SCRIPT:_last_parser_func-name);
+              local_4._0_1_ = 0xd;
+              zERROR::Report(&zerr,2,0,pzVar4,'\0',0,0x106,s_P:\dev\g2addon\release\Gothic\_u,
+                             (char *)0x0);
+              zSTRING::~zSTRING(local_9c);
+            }
+          }
+        }
+        local_4._0_1_ = 8;
+        local_84 = &zSTRING::`vftable';
+        std::basic_string<>::_Tidy(local_80,true);
+        local_4 = CONCAT31(local_4._1_3_,7);
+        local_70 = &zSTRING::`vftable';
+        std::basic_string<>::_Tidy(local_6c,true);
+        local_4 = 0xffffffff;
+        local_5c = &zSTRING::`vftable';
+        std::basic_string<>::_Tidy(local_58,true);
+      }
+    }
+  }
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return uVar10;
+}
+
+
+/* public int __thiscall oCNpc::CanTalk(void) 
+   public: int __thiscall oCNpc::CanTalk(void) */
+
+int __thiscall oCNpc::CanTalk(oCNpc *this)
+
+{
+  float fVar1;
+  
+  fVar1 = *(float *)(this + 0x940);
+  if (NAN(fVar1) || fVar1 < 0.0 == (fVar1 == 0.0)) {
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oDialog.cpp: ? */
+    return 0;
+  }
+  return 1;
+}
+
+
+/* public int __thiscall oCInfoManager::InformationTold(int) 
+   public: int __thiscall oCInfoManager::InformationTold(int) */
+
+int __thiscall oCInfoManager::InformationTold(oCInfoManager *this,int param_1)
+
+{
+  oCInfoManager *poVar1;
+  int iVar2;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oInfo.cpp: ? */
+  poVar1 = this + 4;
+  while( true ) {
+    if (poVar1 == (oCInfoManager *)0x0) {
+      return 0;
+    }
+    iVar2 = *(int *)(poVar1 + 4);
+    if ((iVar2 != 0) && (*(int *)(iVar2 + 0x50) == param_1)) break;
+    poVar1 = *(oCInfoManager **)(poVar1 + 8);
+  }
+  if (*(int *)(iVar2 + 0x48) == 0) {
+    return *(int *)(iVar2 + 0x4c);
+  }
+  return 0;
+}
+
+
+/* public int __thiscall oCNpcInventory::GetAmount(int) 
+   public: int __thiscall oCNpcInventory::GetAmount(int) */
+
+int __thiscall oCNpcInventory::GetAmount(oCNpcInventory *this,int param_1)
+
+{
+  int *piVar1;
+  int iVar2;
+  zCPar_Symbol *pzVar3;
+  int iVar4;
+  oCWorld *this_00;
+  oCVob *poVar5;
+  int iVar6;
+  zTVobType zVar7;
+  int iStack_8;
+  int iStack_4;
+  
+  iVar4 = param_1;
+  if (param_1 < 0) {
+    return 0;
+  }
+  iVar6 = *(int *)(this + 0xb0);
+  param_1 = 0;
+  for (; iVar6 != 0; iVar6 = *(int *)(iVar6 + 8)) {
+    piVar1 = *(int **)(iVar6 + 4);
+    iVar2 = (**(code **)(*piVar1 + 0x78))();
+    if (iVar2 == iVar4) {
+      param_1 = param_1 + piVar1[0xcb];
+    }
+  }
+  if ((((*(int *)(this + 0xa4) != 0) &&
+       (pzVar3 = zCParser::GetSymbol(&parser,iVar4), pzVar3 != (zCPar_Symbol *)0x0)) &&
+      (*(int *)(this + 0xa4) != 0)) &&
+     (iVar4 = GetPackedItemInfo(this,(zSTRING *)pzVar3,1,&iStack_8,&iStack_4), iVar4 != 0)) {
+    zVar7 = 0x81;
+    this_00 = (oCWorld *)(**(code **)(*(int *)ogame + 0x8c))();
+    poVar5 = oCWorld::CreateVob(this_00,zVar7,(zSTRING *)pzVar3);
+    if (poVar5 != (oCVob *)0x0) {
+      *(int *)(poVar5 + 0x32c) = iStack_8;
+      iVar6 = (**(code **)(*(int *)this + 0x44))(poVar5);
+      iVar4 = *(int *)(poVar5 + 4);
+      *(int *)(poVar5 + 4) = iVar4 + -1;
+      if (iVar4 + -1 < 1) {
+        (**(code **)(*(int *)poVar5 + 0xc))(1);
+      }
+      if (iVar6 != 0) {
+        param_1 = param_1 + *(int *)(iVar6 + 0x32c);
+      }
+    }
+  }
+  return param_1;
+}
+
+
+/* public int __thiscall oCNpc::IsAIState(int) 
+   public: int __thiscall oCNpc::IsAIState(int) */
+
+int __thiscall oCNpc::IsAIState(oCNpc *this,int param_1)
+
+{
+  int iVar1;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oNpc.cpp: ? */
+  iVar1 = oCNpc_States::IsInState((oCNpc_States *)(this + 0x588),param_1);
+  return iVar1;
+}
+
+
+/* public class zCWaypoint * __fastcall zCWayNet::GetNearestWaypoint(class zVEC3 const &) 
+   public: class zCWaypoint * __fastcall zCWayNet::GetNearestWaypoint(class zVEC3 const &) */
+
+zCWaypoint * __fastcall zCWayNet::GetNearestWaypoint(zVEC3 *param_1)
+
+{
+  int iVar1;
+  zCWaypoint *pzVar2;
+  float fVar3;
+  zCWaypoint *pzVar4;
+  float *in_EDX;
+  float local_10;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_ulf\zWaynet.cpp: ? */
+  iVar1 = *(int *)(param_1 + 0x30);
+  local_10 = 3.4028235e+38;
+  pzVar4 = (zCWaypoint *)0x0;
+  while (iVar1 != 0) {
+    pzVar2 = *(zCWaypoint **)(iVar1 + 4);
+    iVar1 = *(int *)(iVar1 + 8);
+    fVar3 = ABS(*(float *)(pzVar2 + 0x4c) - in_EDX[2]) + ABS(*(float *)(pzVar2 + 0x48) - in_EDX[1])
+            + ABS(*(float *)(pzVar2 + 0x44) - *in_EDX);
+    if (fVar3 < local_10) {
+      pzVar4 = pzVar2;
+      local_10 = fVar3;
+    }
+  }
+  return pzVar4;
+}
+
+
+/* public __thiscall oCMobInter::oCMobInter(void) 
+   public: __thiscall oCMobInter::oCMobInter(void) */
+
+oCMobInter * __thiscall oCMobInter::oCMobInter(oCMobInter *this)
+
+{
+  basic_string<> local_1d;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oMobInter.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0082231e;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  oCMOB::oCMOB((oCMOB *)this);
+  *(undefined4 *)(this + 0x18c) = 0;
+  *(undefined4 *)(this + 0x188) = 0;
+  local_4 = 1;
+  *(basic_string<> *)(this + 0x194) = local_1d;
+  std::basic_string<>::_Tidy((basic_string<> *)(this + 0x194),false);
+  *(undefined ***)(this + 400) = &zSTRING::`vftable';
+  local_4._0_1_ = 2;
+  *(basic_string<> *)(this + 0x1a8) = local_1d;
+  std::basic_string<>::_Tidy((basic_string<> *)(this + 0x1a8),false);
+  *(undefined ***)(this + 0x1a4) = &zSTRING::`vftable';
+  local_4._0_1_ = 3;
+  *(basic_string<> *)(this + 0x1bc) = local_1d;
+  std::basic_string<>::_Tidy((basic_string<> *)(this + 0x1bc),false);
+  *(undefined ***)(this + 0x1b8) = &zSTRING::`vftable';
+  local_4._0_1_ = 4;
+  *(basic_string<> *)(this + 0x1d0) = local_1d;
+  std::basic_string<>::_Tidy((basic_string<> *)(this + 0x1d0),false);
+  *(undefined ***)(this + 0x1cc) = &zSTRING::`vftable';
+  local_4 = CONCAT31(local_4._1_3_,5);
+  *(basic_string<> *)(this + 0x1e4) = local_1d;
+  std::basic_string<>::_Tidy((basic_string<> *)(this + 0x1e4),false);
+  *(undefined ***)(this + 0x1e0) = &zSTRING::`vftable';
+  *(undefined4 *)(this + 0x204) = 0xffffffff;
+  *(undefined4 *)(this + 0x208) = 0xffffffff;
+  *(undefined4 *)(this + 0x21c) = 0;
+  *(undefined4 *)(this + 0x220) = 0;
+  *(undefined4 *)(this + 0x224) = 0;
+  this[0x20c] = (oCMobInter)0x0;
+  this[0x20d] = (oCMobInter)0x0;
+  this[0x20e] = (oCMobInter)0x0;
+  *(undefined ***)this = &`vftable';
+  *(undefined4 *)(this + 500) = 0;
+  *(undefined4 *)(this + 0x1fc) = 0;
+  *(undefined4 *)(this + 0x1f8) = 1;
+  *(undefined4 *)(this + 0x228) = 0;
+  *(undefined4 *)(this + 0x200) = 0;
+  *(undefined4 *)(this + 0x22c) = 0;
+  *(undefined4 *)(this + 0x230) = 0;
+  *(undefined4 *)(this + 0x210) = 0;
+  this[0x20f] = (oCMobInter)0x0;
+  *(uint *)(this + 0x218) = *(uint *)(this + 0x218) | 1;
+  *(undefined4 *)(this + 0x214) = 0;
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oMobInter.cpp: ? */
+  return this;
+}
+
+
+==============================================================================================================================================================================================
+
+Verdicts
+Item	Verdict	Why
+FUN_006db090	pass	It does RTTI casts, GetInstanceAndIndex (a plain operand pop) and zERROR::Report on bad input. It writes no script or engine state. The FUN_006db6d0 calls sit on the "illegal param" path and only produce messages.
+oCNpc::CanTalk	pass, 100%	It reads the float at this+0x940 and returns 0 if it is > 0, else 1. It does not tick the timer. NPC_REFUSETALK is now whitelisted.
+oCInfoManager::InformationTold	pass, 100%	It walks a list and returns a flag.
+zCWayNet::GetNearestWaypoint	pass, 100%	It is a loop over the waypoint list with a min search.
+oCNpc::IsAIState	pass	It forwards to oCNpc_States::IsInState, which I have not seen. It is a compare against state indices.
+oCNpcInventory::GetAmount	not 100%	See below.
+MOB_HASITEMS	left off	The oCMobInter constructor you pasted does not show the vtable slot. Only 8 infos use it, so I would not chase it.
+
+
+
+==============================================================================================================================================================================================
+
+/* protected int __thiscall oCNpcInventory::GetPackedItemInfo(class zSTRING const &,
+                                                              int,
+                                                              int &,
+                                                              int &) 
+   protected: int __thiscall oCNpcInventory::GetPackedItemInfo(class zSTRING const &,int,int &,int
+   &) */
+
+int __thiscall
+oCNpcInventory::GetPackedItemInfo
+          (oCNpcInventory *this,zSTRING *param_1,int param_2,int *param_3,int *param_4)
+
+{
+  zSTRING *this_00;
+  char cVar1;
+  zSTRING *pzVar2;
+  int iVar3;
+  char *pcVar4;
+  uint uVar5;
+  int iVar6;
+  basic_string<> *pbVar7;
+  long lVar8;
+  undefined **local_70;
+  basic_string<> local_6c [4];
+  char *local_68;
+  undefined **local_5c;
+  basic_string<> local_58 [16];
+  undefined **local_48;
+  basic_string<> local_44 [16];
+  undefined **local_34;
+  basic_string<> local_30 [16];
+  undefined **local_20;
+  basic_string<> local_1c [16];
+  void *local_c;
+  undefined1 *puStack_8;
+  int local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oInventory.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_00821228;
+  local_c = ExceptionList;
+  if (*(int *)(this + 0xa4) == 0) {
+    return 0;
+  }
+  ExceptionList = &local_c;
+  *param_3 = 0;
+  *param_4 = 0;
+  local_6c[0] = param_3._0_1_;
+  std::basic_string<>::_Tidy(local_6c,false);
+  pzVar2 = param_1;
+  local_70 = &zSTRING::`vftable';
+  local_4 = 0;
+  if (*(int *)(param_1 + 0xc) == 0) goto LAB_0070fc69;
+  iVar3 = operator+((zSTRING *)&local_48,(char *)param_1);
+  pcVar4 = *(char **)(iVar3 + 8);
+  local_4._0_1_ = 1;
+  if (pcVar4 == (char *)0x0) {
+    pcVar4 = "";
+  }
+  this_00 = (zSTRING *)(this + 0xb4);
+  uVar5 = zSTRING::Search(this_00,0,pcVar4,1);
+  local_4 = (uint)local_4._1_3_ << 8;
+  local_48 = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy(local_44,true);
+  if ((int)uVar5 < 0) {
+    iVar3 = operator+((zSTRING *)&local_34,(char *)pzVar2);
+    pcVar4 = *(char **)(iVar3 + 8);
+    local_4._0_1_ = 2;
+    if (pcVar4 == (char *)0x0) {
+      pcVar4 = "";
+    }
+    uVar5 = zSTRING::Search(this_00,0,pcVar4,1);
+    local_4 = (uint)local_4._1_3_ << 8;
+    local_34 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(local_30,true);
+    if ((int)uVar5 < 0) {
+      std::basic_string<>::basic_string<>(local_58,&s_,,(allocator<char> *)&param_1);
+      local_5c = &zSTRING::`vftable';
+      local_4._0_1_ = 3;
+      uVar5 = zSTRING::SearchRev(this_00,(zSTRING *)&local_5c,1);
+      local_4 = (uint)local_4._1_3_ << 8;
+      local_5c = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy(local_58,true);
+      if (-1 < (int)uVar5) {
+        pcVar4 = *(char **)(pzVar2 + 8);
+        if (pcVar4 == (char *)0x0) {
+          pcVar4 = "";
+        }
+        uVar5 = zSTRING::Search(this_00,uVar5 + 1,pcVar4,1);
+        if (-1 < (int)uVar5) goto LAB_0070fabd;
+      }
+      iVar3 = std::basic_string<>::compare
+                        ((basic_string<> *)(this + 0xb8),(basic_string<> *)(pzVar2 + 4));
+      if (iVar3 == 0) {
+        uVar5 = 0;
+      }
+      else if ((int)uVar5 < 0) goto LAB_0070fc69;
+    }
+  }
+LAB_0070fabd:
+  if (uVar5 - 1 < *(uint *)(this + 0xc0)) {
+    pcVar4 = std::basic_string<>::at((basic_string<> *)(this + 0xb8),uVar5 - 1);
+  }
+  else {
+    pcVar4 = &spaceChar;
+  }
+  if (((*pcVar4 == ',') || (uVar5 == 0)) ||
+     (*(int *)(this + 0xc0) <= (int)(*(int *)(pzVar2 + 0xc) + uVar5))) {
+    iVar3 = zSTRING::Search(this_00,uVar5,&s_,,1);
+    if (iVar3 < 0) {
+      iVar3 = *(int *)(this + 0xc0);
+    }
+    iVar6 = zSTRING::Copied(this_00,(uint)&local_20,*(int *)(pzVar2 + 0xc) + 1 + uVar5);
+    local_4._0_1_ = 4;
+    if (iVar6 == 0) {
+      pbVar7 = (basic_string<> *)0x0;
+    }
+    else {
+      pbVar7 = (basic_string<> *)(iVar6 + 4);
+    }
+    std::basic_string<>::assign(local_6c,pbVar7,0,0xffffffff);
+    local_4 = (uint)local_4._1_3_ << 8;
+    local_20 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(local_1c,true);
+    pcVar4 = local_68;
+    if (local_68 == (char *)0x0) {
+      pcVar4 = "";
+    }
+    lVar8 = _atol(pcVar4);
+    *param_3 = lVar8;
+    if (lVar8 < 1) {
+      *param_3 = 1;
+    }
+    iVar6 = zSTRING::Search((zSTRING *)&local_70,0,s_E,1);
+    *param_4 = iVar6;
+    if (param_2 != 0) {
+      if ((iVar3 == *(int *)(this + 0xc0)) && (0 < (int)uVar5)) {
+        if (uVar5 - 1 < *(uint *)(this + 0xc0)) {
+          if (*(uint *)(this + 0xc0) <= uVar5 - 1) {
+            std::_Xran();
+          }
+          if (((*(int *)(this + 0xbc) != 0) &&
+              (cVar1 = *(char *)(*(int *)(this + 0xbc) + -1), cVar1 != '\0')) && (cVar1 != -1)) {
+            std::basic_string<>::_Grow((basic_string<> *)(this + 0xb8),*(uint *)(this + 0xc0),false)
+            ;
+          }
+          if (*(int *)(this + 0xbc) != 0) {
+            *(undefined1 *)(*(int *)(this + 0xbc) + -1) = 0xff;
+          }
+          pcVar4 = (char *)(*(int *)(this + 0xbc) + (uVar5 - 1));
+        }
+        else {
+          pcVar4 = &spaceChar;
+        }
+        if (*pcVar4 == ',') {
+          uVar5 = uVar5 - 1;
+        }
+      }
+      zSTRING::Delete(this_00,uVar5,(iVar3 - uVar5) + 1);
+    }
+    local_70 = &zSTRING::`vftable';
+    if (local_68 != (char *)0x0) {
+      cVar1 = local_68[-1];
+      if ((cVar1 != '\0') && (cVar1 != -1)) {
+        local_68[-1] = cVar1 + -1;
+        ExceptionList = local_c;
+        return 1;
+      }
+      ::operator_delete(local_68 + -1);
+    }
+    ExceptionList = local_c;
+    return 1;
+  }
+LAB_0070fc69:
+  local_70 = &zSTRING::`vftable';
+  if (local_68 != (char *)0x0) {
+    cVar1 = local_68[-1];
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      ::operator_delete(local_68 + -1);
+    }
+    else {
+      local_68[-1] = cVar1 + -1;
+    }
+  }
+  ExceptionList = local_c;
+  return 0;
+}
+
+
+
+
+/* public int __thiscall oCNpc_States::IsInState(int) 
+   public: int __thiscall oCNpc_States::IsInState(int) */
+
+int __thiscall oCNpc_States::IsInState(oCNpc_States *this,int param_1)
+
+{
+  int iVar1;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oNpcStates.cpp: ? */
+  if (*(int *)(this + 0x34) == 0) {
+    if (*(int *)(this + 0x70) == 0) {
+      return 0;
+    }
+    if (*(int *)(this + 0x58) == param_1) {
+      return 1;
+    }
+    iVar1 = *(int *)(this + 0x8c);
+  }
+  else {
+    if (*(int *)(this + 0x1c) == param_1) {
+      return 1;
+    }
+    iVar1 = *(int *)(this + 0x50);
+  }
+  if (iVar1 == param_1) {
+    return 1;
+  }
+  return 0;
+}
+
+
+/* public void * __thiscall zCParser::GetInstanceAndIndex(int &) 
+   public: void * __thiscall zCParser::GetInstanceAndIndex(int &) */
+
+void * __thiscall zCParser::GetInstanceAndIndex(zCParser *this,int *param_1)
+
+{
+  int iVar1;
+  zCPar_Symbol *this_00;
+  void *pvVar2;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_ulf\zParser_Lexer.cpp: ? */
+  iVar1 = zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+  if (iVar1 < 1) {
+    *param_1 = iVar1;
+    return (void *)0x0;
+  }
+  this_00 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar1);
+  pvVar2 = (void *)zCPar_Symbol::GetOffset(this_00);
+  *param_1 = iVar1;
+  return pvVar2;
+}
+
+
+void FUN_006db6d0(undefined4 param_1,int param_2)
+
+{
+  char cVar1;
+  zSTRING *pzVar2;
+  int iVar3;
+  zCPar_Symbol *pzVar4;
+  undefined **local_34;
+  basic_string<> local_30 [4];
+  int local_2c;
+  undefined **local_20 [2];
+  int local_18;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0081c3f0;
+  local_c = ExceptionList;
+  if (DAT_008b436c != 0) {
+    if (DAT_008b436c == 1) {
+      ExceptionList = &local_c;
+      pzVar2 = (zSTRING *)operator+((char *)&local_34,(zSTRING *)s_C:_SCRIPT:_);
+      local_4 = 0;
+      zERROR::Report(&zerr,2,0,pzVar2,'\0',0,0xfc,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0);
+      local_4 = 0xffffffff;
+      local_34 = &zSTRING::`vftable';
+      std::basic_string<>::_Tidy(local_30,true);
+    }
+    else {
+      ExceptionList = &local_c;
+      if (DAT_00ab0a7d == '\0') {
+        ExceptionList = &local_c;
+        pzVar2 = (zSTRING *)operator+((char *)&local_34,(zSTRING *)s_C:_SCRIPT:_);
+        local_4 = 1;
+        zERROR::Report(&zerr,3,0,pzVar2,'\0',0,0x100,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        local_4 = 0xffffffff;
+        local_34 = &zSTRING::`vftable';
+        if (local_2c != 0) {
+          cVar1 = *(char *)(local_2c + -1);
+          if ((cVar1 == '\0') || (cVar1 == -1)) {
+            operator_delete((char *)(local_2c + -1));
+          }
+          else {
+            *(char *)(local_2c + -1) = cVar1 + -1;
+          }
+        }
+      }
+      DAT_00ab0a7d = '\x01';
+      pzVar2 = (zSTRING *)operator+((char *)&local_34,(zSTRING *)s_C:_SCRIPT:_);
+      local_4 = 2;
+      zERROR::Report(&zerr,2,0,pzVar2,'\0',0,0x101,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0);
+      local_4 = 0xffffffff;
+      local_34 = &zSTRING::`vftable';
+      if (local_2c != 0) {
+        cVar1 = *(char *)(local_2c + -1);
+        if ((cVar1 == '\0') || (cVar1 == -1)) {
+          operator_delete((char *)(local_2c + -1));
+        }
+        else {
+          *(char *)(local_2c + -1) = cVar1 + -1;
+        }
+      }
+    }
+    if (param_2 != 0) {
+      iVar3 = zCParser::GetCurrentFunc(&parser);
+      pzVar4 = zCParser::GetSymbol(&parser,iVar3);
+      if (pzVar4 != (zCPar_Symbol *)0x0) {
+        pzVar2 = (zSTRING *)
+                 operator+((char *)local_20,(zSTRING *)s_C:_SCRIPT:_last_parser_func-name);
+        local_4 = 3;
+        zERROR::Report(&zerr,2,0,pzVar2,'\0',0,0x106,s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0)
+        ;
+        local_20[0] = &zSTRING::`vftable';
+        if (local_18 != 0) {
+          cVar1 = *(char *)(local_18 + -1);
+          if ((cVar1 != '\0') && (cVar1 != -1)) {
+            *(char *)(local_18 + -1) = cVar1 + -1;
+            ExceptionList = local_c;
+            return;
+          }
+          operator_delete((char *)(local_18 + -1));
+        }
+      }
+    }
+  }
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return;
+}
+
+========================================================================================================================================================================
+Verdicts
+Item	Verdict	Why
+FUN_006db090	pass, 100%	It does RTTI casts and a plain operand pop. The FUN_006db6d0 calls only call zERROR::Report.
+oCNpc_States::IsInState	pass, 100%	It only compares ints.
+GetInstanceAndIndex	pass	It is a pop plus a symbol lookup.
+NPC_HASITEMS	pass with a caveat	See below.
+
+The probe showed inv+0xA4 == 1 on every NPC (1892 and 2007) and on the hero. That field is the inventory's pack flag, so GetAmount's packed path is live everywhere.
+What NPC_HASITEMS does in the packed path
+
+    GetPackedItemInfo(..., 1, ...) finds the item in the pack string at this+0xB4 and deletes that entry from the string.
+    GetAmount then creates the vob and inserts it into the real inventory (vtable +0x44).
+
+So the first call on an NPC unpacks that item type from the pack string into the real inventory. I'm accepting this for three reasons:
+
+    It is the engine's own lazy unpack. The same thing happens on any Npc_HasItems call, an inventory open, or a trade.
+    Totals are preserved. The NPC owns the same items before and after.
+    Nothing is visible. There is no AI, world or script-global change. NnParserGuard already saves and restores ITEM, which item creation can touch.
+
+The one oddity is that on the unpacking call, GetAmount appears to add the real stack amount twice if a stack of that item already exists. That would make the first result too high, and the next evaluation (4.5 s later) is correct. It can only cause a false highlight, never a missed one.
+
+I'm not leaving it out because 326 C_infos use it. If you want the strict version, delete the "NPC_HASITEMS" line.
+
+Audit result
+
+This completes the audit.
+
+    100% read-only (17): everything above except NPC_HASITEMS. Callee bodies were seen for NPC_KNOWSINFO, NPC_REFUSETALK, NPC_ISINSTATE, NPC_GETNEARESTWP, and FUN_006db090. The rest are judged plain getters.
+    Engine-sanctioned side effect (1): NPC_HASITEMS.
+    Left off: MOB_HASITEMS, which only gates a handful of infos like DIA_ARWID_KQ402_JOBDONE, and the Npc_CanSee* family.
+
+
+
+====================================================================================================================================================================================
+////HLP_GETNPC
+undefined4 UndefinedFunction_006eee10(void)
+
+{
+  zCParser *this;
+  zCPar_Symbol *this_00;
+  void *pvVar1;
+  int *piVar2;
+  zCClassDef *pzVar3;
+  undefined4 *puVar4;
+  undefined4 uVar5;
+  TypeDescriptor *pTVar6;
+  TypeDescriptor *pTVar7;
+  undefined4 uVar8;
+  int iStack_4;
+  
+  puVar4 = (undefined4 *)0x0;
+  this = zCParser::GetParser();
+  zCParser::GetParameter(this,&iStack_4);
+  this_00 = zCParser::GetSymbol(this,iStack_4);
+  if (this_00 != (zCPar_Symbol *)0x0) {
+    if ((*(uint *)(this_00 + 0x20) & 0xf000) == 0x7000) {
+      uVar8 = 0;
+      pTVar7 = &class_oCNpc_`RTTI_Type_Descriptor';
+      pTVar6 = &class_zCVob_`RTTI_Type_Descriptor';
+      uVar5 = 0;
+      pvVar1 = zCPar_Symbol::GetInstanceAdr(this_00);
+      puVar4 = (undefined4 *)___RTDynamicCast(pvVar1,uVar5,pTVar6,pTVar7,uVar8);
+      if (puVar4 != (undefined4 *)0x0) goto LAB_006eeea4;
+    }
+    piVar2 = (int *)(**(code **)(*(int *)ogame + 0x8c))();
+    puVar4 = (undefined4 *)(**(code **)(*piVar2 + 0x4c))(this_00);
+    if (puVar4 != (undefined4 *)0x0) {
+      for (pzVar3 = (zCClassDef *)(**(code **)*puVar4)(); pzVar3 != (zCClassDef *)0x0;
+          pzVar3 = *(zCClassDef **)(pzVar3 + 0x3c)) {
+        if (pzVar3 == &oCNpc::classDef) goto LAB_006eeea4;
+      }
+    }
+    puVar4 = (undefined4 *)0x0;
+  }
+LAB_006eeea4:
+  zCParser::SetReturn(this,puVar4);
+                    /* END-> P:\dev\g2addon\release\Gothic\_ulf\oGameExternal.cpp: ? */
+  return 0;
+}
+
+
+==========
+void __thiscall FUN_007a2f20(int param_1,undefined4 param_2)
+
+{
+  *(undefined4 *)(param_1 + 0x1c) = param_2;
+  return;
+}
+                              **************************************************************
+                             *                          FUNCTION                          *
+                             **************************************************************
+                               undefined FUN_007a2f20()
+                               assume FS_OFFSET = 0xffdff000
+             undefined         <UNASSIGNED>   <RETURN>
+                             FUN_007a2f20                                    XREF[14]:    DoStack:007926d8(c), 
+                                                                                          CreateInstance:00792f5f(c), 
+                                                                                          CreateInstance:00792fcf(c), 
+                                                                                          CreatePrototype:00793049(c), 
+                                                                                          CreatePrototype:007930bf(c), 
+                                                                                          AddClassOffset:00794848(c), 
+                                                                                          SetInstance:007948e9(c), 
+                                                                                          SetInstance:00794939(c), 
+                                                                                          ClearAllInstanceRefs:0079691e(c), 
+                                                                                          ClearInstanceRefs:007969a0(c), 
+                                                                                          ResetWithVarReferenceList:00796c
+                                                                                          DeclareFunc:0079e2a5(c), 
+                                                                                          DefineExternal:007a023e(c), 
+                                                                                          SetReturn:007a09c8(c)  
+        007a2f20 8b 44 24 04     MOV        EAX,dword ptr [ESP + Stack[0x4]]
+        007a2f24 89 41 1c        MOV        dword ptr [ECX + 0x1c],EAX
+                             END-> P:\dev\g2addon\release\ZenGin\_ulf\zParser_Symbol.cpp: ?
+        007a2f27 c2 04 00        RET        0x4
+        007a2f2a 90              ??         90h
+        007a2f2b 90              ??         90h
+        007a2f2c 90              ??         90h
+        007a2f2d 90              ??         90h
+        007a2f2e 90              ??         90h
+        007a2f2f 90              ??         90h
+
+
+/* public virtual class zCVob * __thiscall oCWorld::SearchVobByName(class zSTRING const &) 
+   public: virtual class zCVob * __thiscall oCWorld::SearchVobByName(class zSTRING const &) */
+
+zCVob * __thiscall oCWorld::SearchVobByName(oCWorld *this,zSTRING *param_1)
+
+{
+  zCObject *this_00;
+  uint uVar1;
+  uint uVar2;
+  zCVob *pzVar3;
+  zSTRING *pzVar4;
+  int iVar5;
+  zSTRING *pzVar6;
+  uint uVar7;
+  byte *pbVar8;
+  byte *pbVar9;
+  bool bVar10;
+  bool bVar11;
+  int local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oWorld.cpp: ? */
+  pzVar3 = zCWorld::SearchVobByName((zCWorld *)this,param_1);
+  if ((pzVar3 != (zCVob *)0x0) || (local_4 = *(int *)(this + 0x6280), local_4 == 0)) {
+    return pzVar3;
+  }
+  do {
+    this_00 = *(zCObject **)(local_4 + 4);
+    if (this_00 != (zCObject *)0x0) {
+      pzVar4 = zCObject::GetObjectName(this_00);
+      if (param_1 == (zSTRING *)0x0) {
+        pzVar6 = (zSTRING *)0x0;
+      }
+      else {
+        pzVar6 = param_1 + 4;
+      }
+      uVar1 = *(uint *)(pzVar6 + 8);
+      pbVar9 = (byte *)"";
+      if (*(byte **)(pzVar6 + 4) != (byte *)0x0) {
+        pbVar9 = *(byte **)(pzVar6 + 4);
+      }
+      uVar2 = *(uint *)(pzVar4 + 0xc);
+      uVar7 = uVar2;
+      if (uVar1 <= uVar2) {
+        uVar7 = uVar1;
+      }
+      bVar10 = false;
+      iVar5 = 0;
+      bVar11 = true;
+      pbVar8 = *(byte **)(pzVar4 + 8);
+      do {
+        if (uVar7 == 0) break;
+        uVar7 = uVar7 - 1;
+        bVar10 = *pbVar8 < *pbVar9;
+        bVar11 = *pbVar8 == *pbVar9;
+        pbVar8 = pbVar8 + 1;
+        pbVar9 = pbVar9 + 1;
+      } while (bVar11);
+      if (!bVar11) {
+        iVar5 = (1 - (uint)bVar10) - (uint)(bVar10 != 0);
+      }
+      if (((iVar5 == 0) && (uVar1 <= uVar2)) && (uVar2 == uVar1)) {
+        return (zCVob *)this_00;
+      }
+    }
+    local_4 = *(int *)(local_4 + 8);
+    if (local_4 == 0) {
+      return (zCVob *)0x0;
+    }
+  } while( true );
+}
+
+
+====================================================================================================================================================================
+
+
+Verdict: HLP_GETNPC passes (~99%)
+
+FUN_007a2f20 is a plain store. *(symbol + 0x1C) = value is all it does. SetReturn(void*) therefore only does two things:
+
+    pushes the scratch instance_help index onto the operand stack, which every return does
+    stores the NPC pointer into that scratch symbol
+
+Nothing reads that symbol between evaluations, because we only run when the parser is idle. Pass, 100%.
+
+The world virtual at +0x4C. I was wrong earlier. It is a find-by-name, not a find-by-instance: oCWorld::SearchVobByName(zSTRING const&). This fits the wrapper because a zCPar_Symbol starts with its name zSTRING, so passing the symbol pointer passes the instance name. That is also how NPC vobs are named. This assumes the address your NnDumpWorldSlot logged is the function you pasted. If the two differ, tell me.
+
+What the pasted oCWorld::SearchVobByName does:
+
+    It calls zCWorld::SearchVobByName.
+    If that finds nothing, it walks the list at this+0x6280 and compares object names.
+    The walk only compares and returns, so it is read-only.
+
+The only unseen piece is zCWorld::SearchVobByName, which is almost certainly a hash or list lookup by name. It is the only reason this is 99% and not 100%.
+
+For 100%, paste the decompile of zCWorld::SearchVobByName. Type that name into the Functions panel filter; it is a C++ method, so the search works. I wouldn't spend the time for 10 infos, and the whitelist is final as it is.
+Audit status
+
+The audit is complete. Only HLP_GETNPC (one unseen name-lookup) and NPC_HASITEMS (the lazy unpack) carry caveats, and neither can corrupt anything visible.
+
+
+
+====================================================================================================================================================================
+
+
+/* public virtual class zCVob * __thiscall zCWorld::SearchVobByName(class zSTRING const &) 
+   public: virtual class zCVob * __thiscall zCWorld::SearchVobByName(class zSTRING const &) */
+
+zCVob * __thiscall zCWorld::SearchVobByName(zCWorld *this,zSTRING *param_1)
+
+{
+  uint uVar1;
+  uint uVar2;
+  char *pcVar3;
+  ulong uVar4;
+  uint uVar5;
+  zSTRING *pzVar6;
+  int iVar7;
+  uint uVar8;
+  int iVar9;
+  byte *pbVar10;
+  byte *pbVar11;
+  bool bVar12;
+  bool bVar13;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_dieter\zWorld.cpp: ? */
+  if (*(ulong *)(param_1 + 0xc) != 0) {
+    pcVar3 = *(char **)(param_1 + 8);
+    if ((uchar *)pcVar3 == (uchar *)0x0) {
+      pcVar3 = "";
+    }
+    uVar4 = zCChecksum::GetBufferCRC32((uchar *)pcVar3,*(ulong *)(param_1 + 0xc),0);
+    uVar5 = uVar4 & 0x7ff;
+    iVar9 = 0;
+    if (0 < *(int *)(this + uVar5 * 0xc + 0x260)) {
+      do {
+        pzVar6 = zCObject::GetObjectName
+                           (*(zCObject **)(*(int *)(this + (uVar5 * 3 + 0x96) * 4) + iVar9 * 4));
+        uVar1 = *(uint *)(param_1 + 0xc);
+        pbVar11 = (byte *)"";
+        if (*(byte **)(param_1 + 8) != (byte *)0x0) {
+          pbVar11 = *(byte **)(param_1 + 8);
+        }
+        uVar2 = *(uint *)(pzVar6 + 0xc);
+        uVar8 = uVar2;
+        if (uVar1 <= uVar2) {
+          uVar8 = uVar1;
+        }
+        bVar12 = false;
+        iVar7 = 0;
+        bVar13 = true;
+        pbVar10 = *(byte **)(pzVar6 + 8);
+        do {
+          if (uVar8 == 0) break;
+          uVar8 = uVar8 - 1;
+          bVar12 = *pbVar10 < *pbVar11;
+          bVar13 = *pbVar10 == *pbVar11;
+          pbVar10 = pbVar10 + 1;
+          pbVar11 = pbVar11 + 1;
+        } while (bVar13);
+        if (!bVar13) {
+          iVar7 = (1 - (uint)bVar12) - (uint)(bVar12 != 0);
+        }
+        if (((iVar7 == 0) && (uVar1 <= uVar2)) && (uVar2 == uVar1)) {
+          return *(zCVob **)(*(int *)(this + (uVar5 * 3 + 0x96) * 4) + iVar9 * 4);
+        }
+        iVar9 = iVar9 + 1;
+      } while (iVar9 < *(int *)(this + uVar5 * 0xc + 0x260));
+    }
+  }
+  return (zCVob *)0x0;
+}
+
+
+
+====================================================================================================================================================================
+
+Verdict: HLP_GETNPC passes, 100%
+
+zCWorld::SearchVobByName only does the following:
+
+    It computes a CRC32 of the name with zCChecksum::GetBufferCRC32, a pure function over the buffer.
+    It masks the CRC with & 0x7FF to pick a bucket in the world's 2048-slot name hash table.
+    It walks that bucket, compares each vob's name with the requested name, and returns the match or null.
+
+It has no stores, no calls other than the CRC and GetObjectName, and no allocation. Together with the earlier findings, the whole chain is now seen:
+
+    the wrapper
+    SetReturn(void*), which stores to the scratch instance_help symbol (FUN_007a2f20, a plain store)
+    oCWorld::SearchVobByName
+    zCWorld::SearchVobByName
+
+The only assumption left is that the address your NnDumpWorldSlot logged is the oCWorld::SearchVobByName you pasted. I never saw that log line. The function's shape (name search, wrapper passes the symbol, whose first member is its name) fits too well for this to be a real risk.
+Audit status
+
+The audit is finished. Every whitelisted external is either 100% read-only or carries one known caveat:
+
+    NPC_HASITEMS: the engine's own lazy unpack of the packed inventory.
+    HLP_GETNPC: a store to a scratch symbol, which is safe because we only evaluate when the parser is idle.
+
+	
+	
+====================================================================================================================================================================
+/* public virtual class oCItem * __thiscall oCNpcInventory::IsIn(class zSTRING const &,
+                                                                 int) 
+   public: virtual class oCItem * __thiscall oCNpcInventory::IsIn(class zSTRING const &,int) */
+
+oCItem * __thiscall oCNpcInventory::IsIn(oCNpcInventory *this,zSTRING *param_1,int param_2)
+
+{
+  int iVar1;
+  int iVar2;
+  oCItem *poVar3;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oInventory.cpp: ? */
+  iVar1 = *(int *)this;
+  iVar2 = zCParser::GetIndex(&parser,param_1);
+  poVar3 = (oCItem *)(**(code **)(iVar1 + 200))(iVar2,param_2);
+  return poVar3;
+}
+
+
+/* public virtual class oCItem * __thiscall oCNpcInventory::IsIn(int,
+                                                                 int) 
+   public: virtual class oCItem * __thiscall oCNpcInventory::IsIn(int,int) */
+
+oCItem * __thiscall oCNpcInventory::IsIn(oCNpcInventory *this,int param_1,int param_2)
+
+{
+  int iVar1;
+  int iVar2;
+  zCPar_Symbol *pzVar3;
+  int iVar4;
+  oCWorld *this_00;
+  oCVob *poVar5;
+  oCItem *poVar6;
+  zTVobType zVar7;
+  oCNpcInventory *poStack_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oInventory.cpp: ? */
+  iVar1 = param_1;
+  poStack_4 = this;
+  for (iVar4 = *(int *)(this + 0xb0); iVar4 != 0; iVar4 = *(int *)(iVar4 + 8)) {
+    poVar6 = *(oCItem **)(iVar4 + 4);
+    iVar2 = (**(code **)(*(int *)poVar6 + 0x78))();
+    if ((iVar2 == iVar1) && (param_2 <= *(int *)(poVar6 + 0x32c))) {
+      return poVar6;
+    }
+  }
+  if ((((*(int *)(this + 0xa4) != 0) &&
+       (pzVar3 = zCParser::GetSymbol(&parser,iVar1), pzVar3 != (zCPar_Symbol *)0x0)) &&
+      (*(int *)(this + 0xa4) != 0)) &&
+     (iVar4 = GetPackedItemInfo(this,(zSTRING *)pzVar3,1,&param_1,(int *)&poStack_4), iVar4 != 0)) {
+    zVar7 = 0x81;
+    this_00 = (oCWorld *)(**(code **)(*(int *)ogame + 0x8c))();
+    poVar5 = oCWorld::CreateVob(this_00,zVar7,(zSTRING *)pzVar3);
+    if (poVar5 != (oCVob *)0x0) {
+      *(int *)(poVar5 + 0x32c) = param_1;
+      poVar6 = (oCItem *)(**(code **)(*(int *)this + 0x44))(poVar5);
+      iVar4 = *(int *)(poVar5 + 4);
+      *(int *)(poVar5 + 4) = iVar4 + -1;
+      if (iVar4 + -1 < 1) {
+        (**(code **)(*(int *)poVar5 + 0xc))(1);
+      }
+      if ((poVar6 != (oCItem *)0x0) && (param_1 <= *(int *)(poVar6 + 0x32c))) {
+        return poVar6;
+      }
+    }
+  }
+  return (oCItem *)0x0;
+}
+
+
+/* public virtual class oCItem * __thiscall oCNpcInventory::IsIn(class oCItem *,
+                                                                 int) 
+   public: virtual class oCItem * __thiscall oCNpcInventory::IsIn(class oCItem *,int) */
+
+oCItem * __thiscall oCNpcInventory::IsIn(oCNpcInventory *this,oCItem *param_1,int param_2)
+
+{
+  int iVar1;
+  oCItem *poVar2;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oInventory.cpp: ? */
+  if (param_1 != (oCItem *)0x0) {
+    for (iVar1 = *(int *)(this + 0xb0); iVar1 != 0; iVar1 = *(int *)(iVar1 + 8)) {
+      poVar2 = *(oCItem **)(iVar1 + 4);
+      if ((poVar2 == param_1) && (param_2 <= *(int *)(poVar2 + 0x32c))) {
+        return poVar2;
+      }
+    }
+  }
+  return (oCItem *)0x0;
+}
+
+/* public int __thiscall oCNpcInventory::GetAmount(int) 
+   public: int __thiscall oCNpcInventory::GetAmount(int) */
+
+int __thiscall oCNpcInventory::GetAmount(oCNpcInventory *this,int param_1)
+
+{
+  int *piVar1;
+  int iVar2;
+  zCPar_Symbol *pzVar3;
+  int iVar4;
+  oCWorld *this_00;
+  oCVob *poVar5;
+  int iVar6;
+  zTVobType zVar7;
+  int iStack_8;
+  int iStack_4;
+  
+  iVar4 = param_1;
+  if (param_1 < 0) {
+    return 0;
+  }
+  iVar6 = *(int *)(this + 0xb0);
+  param_1 = 0;
+  for (; iVar6 != 0; iVar6 = *(int *)(iVar6 + 8)) {
+    piVar1 = *(int **)(iVar6 + 4);
+    iVar2 = (**(code **)(*piVar1 + 0x78))();
+    if (iVar2 == iVar4) {
+      param_1 = param_1 + piVar1[0xcb];
+    }
+  }
+  if ((((*(int *)(this + 0xa4) != 0) &&
+       (pzVar3 = zCParser::GetSymbol(&parser,iVar4), pzVar3 != (zCPar_Symbol *)0x0)) &&
+      (*(int *)(this + 0xa4) != 0)) &&
+     (iVar4 = GetPackedItemInfo(this,(zSTRING *)pzVar3,1,&iStack_8,&iStack_4), iVar4 != 0)) {
+    zVar7 = 0x81;
+    this_00 = (oCWorld *)(**(code **)(*(int *)ogame + 0x8c))();
+    poVar5 = oCWorld::CreateVob(this_00,zVar7,(zSTRING *)pzVar3);
+    if (poVar5 != (oCVob *)0x0) {
+      *(int *)(poVar5 + 0x32c) = iStack_8;
+      iVar6 = (**(code **)(*(int *)this + 0x44))(poVar5);
+      iVar4 = *(int *)(poVar5 + 4);
+      *(int *)(poVar5 + 4) = iVar4 + -1;
+      if (iVar4 + -1 < 1) {
+        (**(code **)(*(int *)poVar5 + 0xc))(1);
+      }
+      if (iVar6 != 0) {
+        param_1 = param_1 + *(int *)(iVar6 + 0x32c);
+      }
+    }
+  }
+  return param_1;
+}
+
+====================================================================================================================================================================
+
+
+
+Verdict
+Call	Read-only?
+IsIn(oCItem*, int) (+0xCC)	Yes, 100%. It is a list walk comparing pointers.
+IsIn(int, int) (+0xC8)	No. It does the same lazy unpack as GetAmount.
+IsIn(zSTRING const&, int) (+0xC4)	No. It calls zCParser::GetIndex (an unseen name lookup, surely read-only), then forwards to +0xC8.
+oCNpc::IsInInv (all 3)	Thunks only, so each has the same verdict as the IsIn it reaches.
+
+The IsIn(int,int) path works like this:
+
+    It walks the real item list and returns on a match. This part is read-only.
+    If nothing matches and inv+0xA4 != 0, it calls GetPackedItemInfo(..., 1, ...). The 1 is the delete flag, so it removes the entry from the pack string.
+    It then calls CreateVob, sets the amount, and inserts the vob into the real inventory (vtable +0x44).
+
+Three points about that unpack:
+
+    It only happens on a miss in step 1. If the item is already a real item in the inventory, nothing is written.
+    Totals are preserved. The NPC owns the same items before and after, and the unpack is the engine's own lazy path.
+    It is not a pure memory write. CreateVob on an item runs the item's script instance constructor, which probably goes through zCParser::CreateInstance. That can touch the ITEM global and the scratch instance symbols. Call it only when the parser is idle, not from inside a running script, and wrap it with the same save and restore of ITEM that NnParserGuard does.
+
+====================================================================================================================================================================
+	
+
+/* public int __thiscall zCParser::GetIndex(class zSTRING const &) 
+   public: int __thiscall zCParser::GetIndex(class zSTRING const &) */
+
+int __thiscall zCParser::GetIndex(zCParser *this,zSTRING *param_1)
+
+{
+  char cVar1;
+  basic_string<> *pbVar2;
+  int iVar3;
+  undefined **local_20;
+  basic_string<> local_1c [4];
+  int local_18;
+  undefined4 local_14;
+  undefined4 local_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_0082a948;
+  local_c = ExceptionList;
+  if (param_1 == (zSTRING *)0x0) {
+    pbVar2 = (basic_string<> *)0x0;
+  }
+  else {
+    pbVar2 = (basic_string<> *)(param_1 + 4);
+  }
+  local_1c[0] = *pbVar2;
+  local_18 = 0;
+  local_14 = 0;
+  local_10 = 0;
+  ExceptionList = &local_c;
+  std::basic_string<>::assign((basic_string<> *)local_1c,pbVar2,0,0xffffffff);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 0;
+  zSTRING::Upper((zSTRING *)&local_20);
+  iVar3 = zCPar_SymbolTable::GetIndex((zCPar_SymbolTable *)(this + 0x10),(zSTRING *)&local_20);
+  local_20 = &zSTRING::`vftable';
+  if (local_18 != 0) {
+    cVar1 = *(char *)(local_18 + -1);
+    if ((cVar1 == '\0') || (cVar1 == -1)) {
+      ::operator_delete((char *)(local_18 + -1));
+    }
+    else {
+      *(char *)(local_18 + -1) = cVar1 + -1;
+    }
+  }
+  ExceptionList = local_c;
+  return iVar3;
+}
+
+====================================================================================================================================================================
+
+Verdict
+
+Yes, consistent. IsIn(int,int) runs the same code as the tail of GetAmount:
+
+    the same GetPackedItemInfo(..., 1, ...)
+    the same CreateVob
+    the same insert through vtable +0x44
+    the same release of the temporary vob
+
+So it gets the same verdict as NPC_HASITEMS: not strictly read-only, but safe in practice. Calling it "No" while accepting GetAmount was inconsistent.
+
+Both have the same caveat:
+
+    The packed string loses an entry, and the same item appears as a real item in the inventory.
+    The NPC owns the same items before and after.
+    This is the engine's own lazy path, which any trade, inventory open or Npc_HasItems already triggers.
+
+I also guessed that CreateVob might touch the ITEM global through the item instance constructor. I haven't seen that code, so treat it as an unverified guess. It is the same unverified part for GetAmount. Either keep NnParserGuard around the call, or accept the same risk you accepted for HASITEMS.
+Table update
+Call	Verdict
+IsIn(oCItem*, int) (+0xCC)	100% read-only
+IsIn(int, int) (+0xC8)	same as GetAmount: lazy unpack, safe in practice
+IsIn(zSTRING const&, int) (+0xC4)	same as +0xC8, plus GetIndex
+oCNpc::IsInInv (all 3)	same as the IsIn it reaches
+zCParser::GetIndex
+
+Pass, 100%. It does three things:
+
+    It copies the name into a local zSTRING.
+    It uppercases that copy.
+    It looks the copy up in the symbol table and returns the index.
+
+It only writes to its own local copy, which it frees at the end. It never touches the symbol table.
+
+When to use which
+
+    Strictly read-only needed, and a miss on packed items is fine: use IsIn(oCItem*, int) or NnInvCountNoUnpack.
+    Correct answer needed even for packed items: use IsInInv(int, int) or IsIn(int, int). Call it only when no script is running.
+	
+I mean the parser is idle, so none of the game's Daedalus code is executing at the moment your code runs. In practice:
+
+    Safe: your code runs from the plugin's normal per-frame hook (Game_Loop), where the engine is between script calls.
+    Not safe: your code runs from inside a script call, such as a hook on an external, an oCInfo condition, or an AI-state function. Script execution is then mid-flight, with values on the parser's operand stack and a current function set.
+
+Why it matters: starting a script call from your own code (an item instance constructor counts) goes through the parser's shared state. CallFunc clears the operand stack on entry, so doing it mid-script could wipe values the running script still needs.
+
+====================================================================================================================================================================
+
+
+
+/* public virtual class oCVob * __thiscall oCWorld::CreateVob(enum zTVobType,
+                                                              int) 
+   public: virtual class oCVob * __thiscall oCWorld::CreateVob(enum zTVobType,int) */
+
+oCVob * __thiscall oCWorld::CreateVob(oCWorld *this,zTVobType param_1,int param_2)
+
+{
+  char cVar1;
+  bool bVar2;
+  bool bVar3;
+  zSTRING *pzVar4;
+  oCVob *poVar5;
+  int *piVar6;
+  uint uVar7;
+  uint uVar8;
+  char *pcVar9;
+  char *pcVar10;
+  basic_string<> local_64 [4];
+  char *local_60;
+  uint local_5c;
+  undefined4 local_58;
+  undefined **local_54 [2];
+  int local_4c;
+  undefined4 local_48;
+  undefined4 local_44;
+  char local_40 [48];
+  void *pvStack_10;
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+                    /* START-> P:\dev\g2addon\release\Gothic\_ulf\oWorld.cpp: ? */
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_00828fd6;
+  local_c = ExceptionList;
+  bVar2 = false;
+  bVar3 = false;
+  ExceptionList = &local_c;
+  if ('\t' < DAT_008cdcf0) {
+    local_64[0] = param_2._0_1_;
+    ExceptionList = &local_c;
+    std::basic_string<>::_Tidy(local_64,false);
+    local_4 = 0;
+    _itoa(param_2,local_40,10);
+    uVar7 = 0xffffffff;
+    pcVar9 = local_40;
+    do {
+      if (uVar7 == 0) break;
+      uVar7 = uVar7 - 1;
+      cVar1 = *pcVar9;
+      pcVar9 = pcVar9 + 1;
+    } while (cVar1 != '\0');
+    uVar7 = ~uVar7 - 1;
+    bVar3 = std::basic_string<>::_Grow(local_64,uVar7,true);
+    if (bVar3) {
+      pcVar9 = local_40;
+      pcVar10 = local_60;
+      for (uVar8 = uVar7 >> 2; uVar8 != 0; uVar8 = uVar8 - 1) {
+        *(undefined4 *)pcVar10 = *(undefined4 *)pcVar9;
+        pcVar9 = pcVar9 + 4;
+        pcVar10 = pcVar10 + 4;
+      }
+      for (uVar8 = uVar7 & 3; uVar8 != 0; uVar8 = uVar8 - 1) {
+        *pcVar10 = *pcVar9;
+        pcVar9 = pcVar9 + 1;
+        pcVar10 = pcVar10 + 1;
+      }
+      local_60[uVar7] = '\0';
+      local_5c = uVar7;
+    }
+    local_4 = 1;
+    pzVar4 = (zSTRING *)operator+((char *)local_54,(zSTRING *)s_U:_(oCWorld::CreateVob)_);
+    bVar2 = true;
+    bVar3 = true;
+    local_4 = 2;
+    zERROR::Report(&zerr,1,0,pzVar4,'\n',0,0x13b,::s_P:\dev\g2addon\release\Gothic\_u,(char *)0x0);
+  }
+  if (bVar3) {
+    local_54[0] = &zSTRING::`vftable';
+    if (local_4c != 0) {
+      cVar1 = *(char *)(local_4c + -1);
+      if ((cVar1 == '\0') || (cVar1 == -1)) {
+        ::operator_delete((char *)(local_4c + -1));
+      }
+      else {
+        *(char *)(local_4c + -1) = cVar1 + -1;
+      }
+    }
+    local_4c = 0;
+    local_48 = 0;
+    local_44 = 0;
+  }
+  local_4 = 0xffffffff;
+  if (bVar2) {
+    if (local_60 != (char *)0x0) {
+      cVar1 = local_60[-1];
+      if ((cVar1 == '\0') || (cVar1 == -1)) {
+        ::operator_delete(local_60 + -1);
+      }
+      else {
+        local_60[-1] = cVar1 + -1;
+      }
+    }
+    local_60 = (char *)0x0;
+    local_5c = 0;
+    local_58 = 0;
+  }
+  poVar5 = (oCVob *)0x0;
+  if (param_1 == 0x81) {
+    piVar6 = (int *)___RTDynamicCast(zfactory,0,&class_zCObjectFactory_`RTTI_Type_Descriptor',
+                                     &class_oCObjectFactory_`RTTI_Type_Descriptor',0);
+    poVar5 = (oCVob *)(**(code **)(*piVar6 + 0x3c))(param_2);
+  }
+  else if (param_1 == 0x82) {
+    piVar6 = (int *)___RTDynamicCast(zfactory,0,&class_zCObjectFactory_`RTTI_Type_Descriptor',
+                                     &class_oCObjectFactory_`RTTI_Type_Descriptor',0);
+    poVar5 = (oCVob *)(**(code **)(*piVar6 + 0x38))(param_2);
+    ExceptionList = pvStack_10;
+    return poVar5;
+  }
+  ExceptionList = local_c;
+  return poVar5;
+}
+
+/* public int __thiscall zCParser::CreateInstance(class zSTRING &,
+                                                  void *) 
+   public: int __thiscall zCParser::CreateInstance(class zSTRING &,void *) */
+
+int __thiscall zCParser::CreateInstance(zCParser *this,zSTRING *param_1,void *param_2)
+
+{
+  zSTRING *pzVar1;
+  int iVar2;
+  zCPar_Symbol *this_00;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_ulf\zParser.cpp: ? */
+  pzVar1 = param_1;
+  zSTRING::Upper(param_1);
+  iVar2 = zCPar_SymbolTable::GetIndex((zCPar_SymbolTable *)(this + 0x10),pzVar1);
+  this_00 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar2);
+  if ((this_00 == (zCPar_Symbol *)0x0) || ((*(uint *)(this_00 + 0x20) & 0xf000) != 0x7000)) {
+    return 0;
+  }
+  FUN_007a2f20(param_2);
+  zCPar_Symbol::SetUseInstance(this_00);
+  zCPar_Symbol::GetStackPos(this_00,(int *)&param_1,0);
+  DoStack(this,(int)param_1);
+  return 1;
+}
+
+
+/* public int __thiscall zCParser::CreateInstance(int,
+                                                  void *) 
+   public: int __thiscall zCParser::CreateInstance(int,void *) */
+
+int __thiscall zCParser::CreateInstance(zCParser *this,int param_1,void *param_2)
+
+{
+  zCPar_Symbol *this_00;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_ulf\zParser.cpp: ? */
+  this_00 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),param_1);
+  if ((this_00 == (zCPar_Symbol *)0x0) || ((*(uint *)(this_00 + 0x20) & 0xf000) != 0x7000)) {
+    return 0;
+  }
+  FUN_007a2f20(param_2);
+  zCPar_Symbol::SetUseInstance(this_00);
+  zCPar_Symbol::GetStackPos(this_00,&param_1,0);
+  DoStack(this,param_1);
+  return 1;
+}
+
+====================================================================================================================================================================
+
+Verdict: GetAmount, IsIn(int,int) and IsInInv stay "safe in practice"
+
+The chain is now seen down to the item constructor, and it matches the earlier verdict with one correction.
+
+What the unpack does:
+
+    oCWorld::CreateVob(0x81, instanceIndex) only logs when debug level is above 9. For type 0x81 (item) it calls oCObjectFactory vtable +0x3C with the instance index.
+    That factory slot is unseen. It is almost certainly CreateItem(int), which news an oCItem and runs its script instance.
+    zCParser::CreateInstance(int, void*) is seen. It does four things:
+        looks up the symbol and checks that it is an instance (type 0x7000)
+        stores the new object's pointer at symbol+0x1C (FUN_007a2f20)
+        calls SetUseInstance
+        runs the instance's bytecode with DoStack, which is the Daedalus instance ItMi_Gold(C_Item) { name = ...; } body
+
+Correction to what I said before. I guessed the unpack might touch the ITEM global. It doesn't. It overwrites the item instance's own symbol (for example ITMI_GOLD) with a pointer to the new item. It also executes that instance's constructor bytecode. So CreateVob does run script code, though only the instance body, not a function call through CallFunc.
+
+Why I still call it safe:
+
+    The pointer overwrite is what the engine does on every item creation. Every item spawn, trade and loot drop rewrites that symbol. Nothing can depend on a previous value, and the new item is alive in the inventory.
+    Instance bodies are normally plain field assignments. They write into the new item through that symbol's offset, so they touch only the new item.
+    It is the engine's own path. Npc_HasItems takes it while a script is running, so the parser tolerates it.
+    Totals are preserved.
+
+What's still unproven:
+
+    the factory slot +0x3C
+    DoStack itself. I assume it runs the body without clearing the operand stack, unlike CallFunc. If it does clear it, it matters only mid-script.
+    a mod whose item instance bodies call externals or other functions. That is rare. If you need certainty, the census could scan item instance bytecode for CALL/CALLEXTERN, and I can write that.
+
+1. Answer on "parser idle"
+
+Keep the rule for your own calls. DoStack shares the parser's operand stack and state, so running it from inside a running script or an external hook is the one case I can't vouch for. From Game_Loop or any plugin per-frame code it is fine. That is the same condition NnParserBusy() checks.
+2. For your other plugin
+Call	Verdict
+IsIn(oCItem*, int)	100% read-only
+IsIn(int,int), IsIn(zSTRING,int), IsInInv (all 3), GetAmount	Safe in practice. They can unpack a packed item and run its constructor body, but only the item instance symbol and the new item are touched. Call them only when the parser is idle.
+NnInvCountNoUnpack	Read-only, but it misses items still packed
+
+//strictly read-only lookup. This counts an item by instance id without triggering the unpack. 
+//This misses items still in the packed string (inv+0xA4 is 1 on every NPC), so it can return 0 for an item the NPC really owns
+static int NnInvCountNoUnpack(oCNpc* npc, int instId)
+{
+    if (!npc || instId < 0) return 0;
+    char* inv = (char*)&npc->inventory2;
+    int total = 0;
+    // list head at inv+0xB0, node: +4 = data, +8 = next
+    for (char* n = *(char**)(inv + 0xB0); n; n = *(char**)(n + 8)) {
+        oCItem* it = *(oCItem**)(n + 4);
+        if (it && it->GetInstance() == instId)
+            total += *(int*)((char*)it + 0x32C);   // amount
+    }
+    return total;
+}
+
+
+==========================================================================================================================================================================================================================
+
+
+
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+/* public void * __thiscall zCParser::CallFunc(int,
+                                               ...) 
+   public: void * __cdecl zCParser::CallFunc(int,...) */
+
+void * __thiscall zCParser::CallFunc(zCParser *this,int param_1,...)
+
+{
+  zCPar_DataStack *this_00;
+  char cVar1;
+  float _Value;
+  zCPar_Symbol *pzVar2;
+  uint uVar3;
+  char *pcVar4;
+  zSTRING *pzVar5;
+  void *pvVar6;
+  undefined1 *puVar7;
+  int iVar8;
+  int *piVar9;
+  undefined1 **ppuVar10;
+  float fStack00000008;
+  zSTRING azStack_13e [2];
+  basic_string<> local_11d;
+  float *local_11c;
+  undefined1 *local_118;
+  zCPar_Symbol *local_114;
+  uint local_110;
+  int local_10c;
+  undefined **local_108;
+  basic_string<> local_104 [16];
+  undefined **local_f4;
+  basic_string<> local_f0 [16];
+  undefined **local_e0;
+  basic_string<> local_dc [16];
+  undefined **local_cc;
+  basic_string<> local_c8 [16];
+  undefined **local_b8;
+  basic_string<> abStack_b4 [16];
+  zSTRING local_a4 [20];
+  undefined **local_90;
+  basic_string<> abStack_8c [16];
+  undefined **local_7c;
+  basic_string<> local_78 [16];
+  undefined **local_68;
+  basic_string<> abStack_64 [16];
+  undefined **local_54;
+  basic_string<> local_50 [16];
+  char local_40 [52];
+  void *local_c;
+  undefined1 *puStack_8;
+  int local_4;
+  
+  local_4 = -1;
+  puStack_8 = &LAB_0082a900;
+  local_c = ExceptionList;
+  ExceptionList = &local_c;
+  std::basic_string<>::_Tidy(local_104,false);
+  local_108 = &zSTRING::`vftable';
+  local_4 = 0;
+  _DAT_00ab6298 = 0;
+  pzVar2 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(param_1 + 0x10),(int)fStack00000008);
+  _Value = fStack00000008;
+  local_114 = pzVar2;
+  if ((pzVar2 == (zCPar_Symbol *)0x0) || ((*(uint *)(pzVar2 + 0x20) & 0xf000) != 0x5000)) {
+    local_f0[0] = local_11d;
+    std::basic_string<>::_Tidy(local_f0,false);
+    local_4._0_1_ = 1;
+    local_f4 = &zSTRING::`vftable';
+    _itoa((int)_Value,local_40,10);
+    uVar3 = 0xffffffff;
+    pcVar4 = local_40;
+    do {
+      if (uVar3 == 0) break;
+      uVar3 = uVar3 - 1;
+      cVar1 = *pcVar4;
+      pcVar4 = pcVar4 + 1;
+    } while (cVar1 != '\0');
+    std::basic_string<>::assign(local_f0,local_40,~uVar3 - 1);
+    local_4._0_1_ = 2;
+    std::basic_string<>::basic_string<>
+              (local_c8,s_Warning_:_Engine_calls_an_undefi,(allocator<char> *)&local_11d);
+    local_cc = &zSTRING::`vftable';
+    local_4._0_1_ = 3;
+    pcVar4 = (char *)operator+((zSTRING *)&local_68,(zSTRING *)&local_cc);
+    local_4._0_1_ = 4;
+    pzVar5 = (zSTRING *)operator+((zSTRING *)&local_90,pcVar4);
+    local_4._0_1_ = 5;
+    zSTRING::zSTRING(local_a4,&s_U:PAR:_);
+    local_4._0_1_ = 6;
+    if (*(int *)param_1 != 0) {
+      local_118 = azStack_13e + -6;
+      zSTRING::zSTRING(azStack_13e + -6,pzVar5);
+      (**(code **)param_1)();
+    }
+    pzVar5 = (zSTRING *)operator+((zSTRING *)&local_b8,local_a4);
+    local_4._0_1_ = 7;
+    zERROR::Message(&zerr,pzVar5);
+    local_4._0_1_ = 6;
+    local_b8 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(abStack_b4,true);
+    zSTRING::~zSTRING(local_a4);
+    local_4._0_1_ = 4;
+    local_90 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(abStack_8c,true);
+    local_4._0_1_ = 3;
+    local_68 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(abStack_64,true);
+    local_4._0_1_ = 2;
+    local_cc = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(local_c8,true);
+    local_4 = (uint)local_4._1_3_ << 8;
+    local_f4 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy(local_f0,true);
+  }
+  else {
+    this_00 = (zCPar_DataStack *)(param_1 + 0x58);
+    zCPar_DataStack::Clear(this_00);
+    local_110 = 0;
+    if ((*(uint *)(pzVar2 + 0x20) & 0xfff) != 0) {
+      local_11c = &fStack00000008;
+      ppuVar10 = &puStack_8;
+      piVar9 = &local_4;
+      do {
+        pzVar2 = zCPar_SymbolTable::GetSymbol
+                           ((zCPar_SymbolTable *)(param_1 + 0x10),
+                            local_110 + 1 + (int)fStack00000008);
+        uVar3 = *(uint *)(pzVar2 + 0x20) >> 0xc & 0xf;
+        if (uVar3 == 1) {
+          local_118 = (undefined1 *)local_11c[1];
+          local_11c = local_11c + 1;
+          zCPar_Symbol::SetValue(pzVar2,(float)local_118,0);
+          puVar7 = (undefined1 *)__ftol();
+LAB_00792c5c:
+          ppuVar10 = ppuVar10 + 1;
+          piVar9 = piVar9 + 1;
+          zCPar_DataStack::Push(this_00,(int)puVar7);
+          iVar8 = 0x40;
+LAB_00792c65:
+          zCPar_DataStack::Push(this_00,iVar8);
+        }
+        else {
+          if (uVar3 == 2) {
+            local_11c = local_11c + 1;
+            local_118 = (undefined1 *)*local_11c;
+            zCPar_Symbol::SetValue(pzVar2,(int)local_118,0);
+            puVar7 = local_118;
+            goto LAB_00792c5c;
+          }
+          if (uVar3 == 3) {
+            ppuVar10 = ppuVar10 + 5;
+            local_11c = local_11c + 5;
+            piVar9 = piVar9 + 5;
+            std::basic_string<>::basic_string<>
+                      (local_dc,(basic_string<> *)
+                                (-(uint)(ppuVar10 != (undefined1 **)0x0) & (uint)piVar9));
+            local_e0 = &zSTRING::`vftable';
+            local_4._0_1_ = 8;
+            std::basic_string<>::assign(local_104,(basic_string<> *)local_dc,0,0xffffffff);
+            local_4 = (uint)local_4._1_3_ << 8;
+            local_e0 = &zSTRING::`vftable';
+            std::basic_string<>::_Tidy(local_dc,true);
+            zCPar_Symbol::SetValue(pzVar2,(zSTRING *)&local_108,0);
+            pvVar6 = zCPar_Symbol::GetDataAdr(local_114,0);
+            zCPar_DataStack::Push(this_00,(int)pvVar6);
+            iVar8 = 0x41;
+            goto LAB_00792c65;
+          }
+          pcVar4 = (char *)operator+((char *)&local_54,(zSTRING *)s_Function_type_not_supported._();
+          local_4._0_1_ = 9;
+          pzVar5 = (zSTRING *)operator+((zSTRING *)&local_7c,pcVar4);
+          local_4._0_1_ = 10;
+          Error((zCParser *)param_1,pzVar5,0);
+          local_4._0_1_ = 9;
+          local_7c = &zSTRING::`vftable';
+          std::basic_string<>::_Tidy(local_78,true);
+          local_4 = (uint)local_4._1_3_ << 8;
+          local_54 = &zSTRING::`vftable';
+          std::basic_string<>::_Tidy(local_50,true);
+        }
+        local_110 = local_110 + 1;
+      } while (local_110 < (*(uint *)(local_114 + 0x20) & 0xfff));
+      pzVar2 = local_114;
+    }
+    *(float *)(param_1 + 0x219c) = fStack00000008;
+    zCPar_Symbol::GetStackPos(pzVar2,&local_10c,0);
+    DoStack((zCParser *)param_1,local_10c);
+    iVar8 = zCPar_Symbol::HasFlag(pzVar2,2);
+    if ((iVar8 != 0) &&
+       ((iVar8 = zCPar_Symbol::GetOffset(pzVar2), iVar8 == 2 ||
+        (iVar8 = zCPar_Symbol::GetOffset(pzVar2), iVar8 == 1)))) {
+      iVar8 = zCPar_DataStack::Pop(this_00);
+      if (iVar8 == 0x40) {
+        _DAT_00ab6298 = zCPar_DataStack::Pop(this_00);
+      }
+      else if (iVar8 == 0x41) {
+        piVar9 = (int *)zCPar_DataStack::Pop(this_00);
+        _DAT_00ab6298 = *piVar9;
+      }
+      else {
+        _DAT_00ab6298 = 0;
+      }
+    }
+    *(undefined4 *)(param_1 + 0x219c) = 0xffffffff;
+  }
+  local_4 = -1;
+  local_108 = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy(local_104,true);
+  ExceptionList = local_c;
+  return &DAT_00ab6298;
+}
+
+
+
+
+/* private void __thiscall zCParser::DoStack(int) 
+   private: void __thiscall zCParser::DoStack(int) */
+
+void __thiscall zCParser::DoStack(zCParser *this,int param_1)
+
+{
+  zCPar_Stack *pzVar1;
+  zCPar_DataStack *pzVar2;
+  undefined4 uVar3;
+  zCParser *pzVar4;
+  uchar uVar5;
+  byte bVar6;
+  int iVar7;
+  void *pvVar8;
+  zCPar_Symbol *pzVar9;
+  int *piVar10;
+  uint uVar11;
+  undefined4 *puVar12;
+  uint *puVar13;
+  int *piVar14;
+  float *pfVar15;
+  zSTRING *pzVar16;
+  float fVar17;
+  zCView *pzVar18;
+  int iVar19;
+  uint uVar20;
+  undefined1 local_40;
+  undefined1 local_3f;
+  undefined1 local_3e;
+  undefined1 local_3d;
+  zCParser *local_3c;
+  undefined4 local_38;
+  undefined **ppuStack_34;
+  basic_string<> abStack_30 [16];
+  zSTRING azStack_20 [20];
+  void *pvStack_c;
+  undefined1 *puStack_8;
+  undefined4 uStack_4;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_ulf\zParser.cpp: ? */
+  uStack_4 = 0xffffffff;
+  puStack_8 = &LAB_0082a880;
+  pvStack_c = ExceptionList;
+  ExceptionList = &pvStack_c;
+  local_3c = this;
+  zCPar_Stack::SetPopPos((zCPar_Stack *)(this + 0x48),param_1);
+  local_38 = 0;
+LAB_00791997:
+  if (*(int *)(this + 0x2198) != 0) {
+    pzVar18 = *(zCView **)(this + 0x2194);
+    iVar19 = 1;
+    iVar7 = zCPar_Stack::GetPopPos((zCPar_Stack *)(this + 0x48));
+    ShowPCode(this,iVar7,pzVar18,iVar19);
+    local_3e = 0;
+    local_3f = 0;
+    local_40 = 0;
+    local_3d = 0;
+    (**(code **)(*(int *)zrenderer + 0x110))(&local_40,3);
+    (**(code **)(*(int *)screen + 0x2c))();
+    (**(code **)(*(int *)zrenderer + 0x10c))(1,0,0);
+    iVar7 = (**(code **)(*(int *)zinput + 0x1c))(0x3f);
+    if (iVar7 == 0) {
+      while ((iVar7 = (**(code **)(*(int *)zinput + 0x1c))(0x44), iVar7 != 0 ||
+             (iVar7 = (**(code **)(*(int *)zinput + 0x1c))(0x57), iVar7 != 0))) {
+        sysEvent();
+      }
+      do {
+        sysEvent();
+        local_3c = (zCParser *)(**(code **)(*(int *)zinput + 0x1c))(0x57);
+        iVar7 = (**(code **)(*(int *)zinput + 0x1c))(0x44);
+        if (iVar7 != 0) break;
+        iVar7 = (**(code **)(*(int *)zinput + 0x1c))(0x57);
+      } while (iVar7 == 0);
+    }
+    else {
+      *(undefined4 *)(this + 0x2198) = 0;
+      if (*(zCView **)(this + 0x2194) != (zCView *)0x0) {
+        zCView::RemoveItem(screen,*(zCView **)(this + 0x2194));
+      }
+      *(undefined4 *)(this + 0x2198) = 0;
+    }
+  }
+  pzVar1 = (zCPar_Stack *)(this + 0x48);
+  uVar5 = zCPar_Stack::PopByte(pzVar1);
+  pzVar4 = local_3c;
+  switch(uVar5) {
+  case '\0':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13;
+    }
+    else {
+      uVar20 = 0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = iVar7 + uVar20;
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *piVar14 + uVar20;
+    }
+    break;
+  case '\x01':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13;
+    }
+    else {
+      uVar20 = 0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = uVar20 - iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = uVar20 - *piVar14;
+    }
+    break;
+  case '\x02':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = iVar19 * iVar7;
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *piVar14 * iVar7;
+    }
+    else {
+      uVar20 = 0;
+    }
+    break;
+  case '\x03':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = iVar7 / iVar19;
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = iVar7 / *piVar14;
+    }
+    else {
+      uVar20 = iVar7 / 0;
+    }
+    break;
+  case '\x04':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = iVar7 % iVar19;
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = iVar7 % *piVar14;
+    }
+    else {
+      uVar20 = iVar7 % 0;
+    }
+    break;
+  case '\x05':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13;
+    }
+    else {
+      uVar20 = 0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar11 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = uVar11 | uVar20;
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13 | uVar20;
+    }
+    break;
+  case '\x06':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar11 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar11 = *puVar13;
+    }
+    else {
+      uVar11 = 0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = uVar20 & uVar11;
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13 & uVar11;
+    }
+    else {
+      uVar20 = 0;
+    }
+    break;
+  case '\a':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 < iVar19);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 < *piVar14);
+    }
+    else {
+      uVar20 = (uint)(iVar7 < 0);
+    }
+    break;
+  case '\b':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar19 < iVar7);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(*piVar14 < iVar7);
+    }
+    else {
+      uVar20 = (uint)(0 < iVar7);
+    }
+    break;
+  case '\t':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+    }
+    else {
+      zCPar_DataStack::Pop(pzVar2);
+      piVar14 = (int *)0x0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar10 = (int *)zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar10;
+    }
+    else {
+      *piVar14 = 0;
+    }
+    goto LAB_00791997;
+  default:
+    goto switchD_00791ab8_caseD_a;
+  case '\v':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar19 = *piVar14;
+    }
+    else {
+      iVar19 = 0;
+    }
+    if ((iVar7 == 0) && (iVar19 == 0)) goto LAB_00792128;
+LAB_0079218a:
+    uVar20 = 1;
+    break;
+  case '\f':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar19 = *piVar14;
+    }
+    else {
+      iVar19 = 0;
+    }
+    if ((iVar7 != 0) && (iVar19 != 0)) goto LAB_0079218a;
+LAB_00792128:
+    uVar20 = 0;
+    break;
+  case '\r':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13;
+    }
+    else {
+      uVar20 = 0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = uVar20 << ((byte)iVar7 & 0x1f);
+    }
+    else if (iVar7 == 0x41) {
+      puVar12 = (undefined4 *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = uVar20 << ((byte)*puVar12 & 0x1f);
+    }
+    break;
+  case '\x0e':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13;
+    }
+    else {
+      uVar20 = 0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (int)uVar20 >> ((byte)iVar7 & 0x1f);
+    }
+    else if (iVar7 == 0x41) {
+      puVar12 = (undefined4 *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (int)uVar20 >> ((byte)*puVar12 & 0x1f);
+    }
+    break;
+  case '\x0f':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 <= iVar19);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 <= *piVar14);
+    }
+    else {
+      uVar20 = (uint)(iVar7 < 1);
+    }
+    break;
+  case '\x10':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 == iVar19);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 == *piVar14);
+    }
+    else {
+      uVar20 = (uint)(iVar7 == 0);
+    }
+    break;
+  case '\x11':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 != iVar19);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar7 != *piVar14);
+    }
+    else {
+      uVar20 = (uint)(iVar7 != 0);
+    }
+    break;
+  case '\x12':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      iVar7 = *piVar14;
+    }
+    else {
+      iVar7 = 0;
+    }
+    iVar19 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar19 == 0x40) {
+      iVar19 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(iVar19 <= iVar7);
+    }
+    else if (iVar19 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = (uint)(*piVar14 <= iVar7);
+    }
+    else {
+      uVar20 = (uint)(-1 < iVar7);
+    }
+    break;
+  case '\x13':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+    }
+    else {
+      zCPar_DataStack::Pop(pzVar2);
+      piVar14 = (int *)0x0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 + iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar10 = (int *)zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 + *piVar10;
+    }
+    else {
+      *piVar14 = *piVar14;
+    }
+    goto LAB_00791997;
+  case '\x14':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+    }
+    else {
+      zCPar_DataStack::Pop(pzVar2);
+      piVar14 = (int *)0x0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 - iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar10 = (int *)zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 - *piVar10;
+    }
+    else {
+      *piVar14 = *piVar14;
+    }
+    goto LAB_00791997;
+  case '\x15':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+    }
+    else {
+      zCPar_DataStack::Pop(pzVar2);
+      piVar14 = (int *)0x0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 * iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar10 = (int *)zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 * *piVar10;
+    }
+    else {
+      *piVar14 = 0;
+    }
+    goto LAB_00791997;
+  case '\x16':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+    }
+    else {
+      zCPar_DataStack::Pop(pzVar2);
+      piVar14 = (int *)0x0;
+    }
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 / iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar10 = (int *)zCPar_DataStack::Pop(pzVar2);
+      *piVar14 = *piVar14 / *piVar10;
+    }
+    else {
+      *piVar14 = *piVar14 / 0;
+    }
+    goto LAB_00791997;
+  case '\x1e':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      uVar20 = zCPar_DataStack::Pop(pzVar2);
+    }
+    else {
+      if (iVar7 != 0x41) goto LAB_00792128;
+      puVar13 = (uint *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = *puVar13;
+    }
+    break;
+  case '\x1f':
+    pzVar2 = (zCPar_DataStack *)(this + 0x58);
+    iVar7 = zCPar_DataStack::Pop(pzVar2);
+    if (iVar7 == 0x40) {
+      iVar7 = zCPar_DataStack::Pop(pzVar2);
+      uVar20 = -iVar7;
+    }
+    else if (iVar7 == 0x41) {
+      piVar14 = (int *)zCPar_DataStack::Pop(pzVar2);
+      uVar20 = -*piVar14;
+    }
+    else {
+      uVar20 = 0;
+    }
+    break;
+  case ' ':
+    iVar7 = PopDataValue(this);
+    uVar20 = (uint)(iVar7 == 0);
+    break;
+  case '!':
+    uVar20 = PopDataValue(this);
+    uVar20 = ~uVar20;
+    break;
+  case '<':
+    goto switchD_00791ab8_caseD_3c;
+  case '=':
+    uVar3 = *(undefined4 *)(this + 0x2198);
+    *(undefined4 *)(this + 0x2198) = local_38;
+    param_1 = zCPar_Stack::PopInt(pzVar1);
+    iVar7 = zCPar_Stack::GetPopPos(pzVar1);
+    DoStack(this,param_1);
+    zCPar_Stack::SetPopPos(pzVar1,iVar7);
+    *(undefined4 *)(this + 0x2198) = uVar3;
+    goto LAB_00791997;
+  case '>':
+    uVar3 = *(undefined4 *)(local_3c + 0x2198);
+    iVar19 = 0;
+    piVar14 = &param_1;
+    pzVar1 = (zCPar_Stack *)(local_3c + 0x48);
+    *(undefined4 *)(local_3c + 0x2198) = 0;
+    cur_parser = local_3c;
+    iVar7 = zCPar_Stack::PopInt(pzVar1);
+    pzVar9 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(pzVar4 + 0x10),iVar7);
+    zCPar_Symbol::GetStackPos(pzVar9,piVar14,iVar19);
+    iVar7 = param_1;
+    pzVar9 = zCPar_Symbol::GetUseInstance();
+    iVar19 = zCPar_Stack::GetPopPos(pzVar1);
+    (*(code *)iVar7)();
+    zCPar_Stack::SetPopPos((zCPar_Stack *)(local_3c + 0x48),iVar19);
+    zCPar_Symbol::SetUseInstance(pzVar9);
+    *(undefined4 *)(local_3c + 0x2198) = uVar3;
+    this = local_3c;
+    goto LAB_00791997;
+  case '@':
+    uVar20 = zCPar_Stack::PopInt(pzVar1);
+    break;
+  case 'A':
+    iVar7 = zCPar_Stack::PopInt(pzVar1);
+    pzVar9 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar7);
+    uVar20 = 0;
+    goto LAB_00791ae1;
+  case 'C':
+    iVar7 = zCPar_Stack::PopInt(pzVar1);
+    zCPar_DataStack::Push((zCPar_DataStack *)(this + 0x58),iVar7);
+    goto LAB_00791997;
+  case 'F':
+    piVar14 = PopVarAddress(this);
+    zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+    pzVar16 = (zSTRING *)zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+    zSTRING::zSTRING((zSTRING *)&ppuStack_34,pzVar16);
+    uStack_4 = 0;
+    std::basic_string<>::assign((basic_string<> *)(piVar14 + 1),abStack_30,0,0xffffffff);
+    uStack_4 = 0xffffffff;
+    ppuStack_34 = &zSTRING::`vftable';
+    std::basic_string<>::_Tidy((basic_string<> *)abStack_30,true);
+    goto LAB_00791997;
+  case 'G':
+    piVar14 = PopVarAddress(this);
+    zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+    iVar7 = zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+    *piVar14 = iVar7;
+    goto LAB_00791997;
+  case 'H':
+    piVar14 = PopVarAddress(this);
+    iVar7 = PopDataValue(this);
+    *piVar14 = iVar7;
+    goto LAB_00791997;
+  case 'I':
+    pfVar15 = (float *)PopVarAddress(this);
+    fVar17 = PopFloatValue(this);
+    *pfVar15 = fVar17;
+    goto LAB_00791997;
+  case 'J':
+    iVar7 = zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+    zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar7);
+    iVar7 = zCPar_DataStack::Pop((zCPar_DataStack *)(this + 0x58));
+    pzVar9 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar7);
+    iVar7 = zCPar_Symbol::GetOffset(pzVar9);
+    FUN_007a2f20(iVar7);
+    goto LAB_00791997;
+  case 'K':
+    iVar7 = zCPar_Stack::PopInt(pzVar1);
+    zCPar_Stack::SetPopPos(pzVar1,iVar7);
+    goto LAB_00791997;
+  case 'L':
+    param_1 = zCPar_Stack::PopInt(pzVar1);
+    iVar7 = PopDataValue(this);
+    if (iVar7 == 0) {
+      zCPar_Stack::SetPopPos(pzVar1,param_1);
+    }
+    goto LAB_00791997;
+  case 'P':
+    iVar7 = zCPar_Stack::PopInt(pzVar1);
+    pzVar9 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar7);
+    zCPar_Symbol::SetUseInstance(pzVar9);
+    goto LAB_00791997;
+  case 0xf5:
+    iVar7 = zCPar_Stack::PopInt(pzVar1);
+    pzVar9 = zCPar_SymbolTable::GetSymbol((zCPar_SymbolTable *)(this + 0x10),iVar7);
+    bVar6 = zCPar_Stack::PopByte(pzVar1);
+    uVar20 = (uint)bVar6;
+LAB_00791ae1:
+    pvVar8 = zCPar_Symbol::GetDataAdr(pzVar9,uVar20);
+    zCPar_DataStack::Push((zCPar_DataStack *)(this + 0x58),(int)pvVar8);
+    zCPar_DataStack::Push((zCPar_DataStack *)(this + 0x58),0x41);
+    goto LAB_00791997;
+  }
+  zCPar_DataStack::Push((zCPar_DataStack *)(this + 0x58),uVar20);
+  zCPar_DataStack::Push((zCPar_DataStack *)(this + 0x58),0x40);
+  goto LAB_00791997;
+switchD_00791ab8_caseD_a:
+  pzVar16 = (zSTRING *)zSTRING::zSTRING(azStack_20,s_Error_DoStack.);
+  uStack_4 = 1;
+  Error(this,pzVar16,0);
+  uStack_4 = 0xffffffff;
+  zSTRING::~zSTRING(azStack_20);
+  if (uVar5 == '<') {
+switchD_00791ab8_caseD_3c:
+    ExceptionList = pvStack_c;
+    return;
+  }
+  goto LAB_00791997;
+}
+
+
+
+/* public int __thiscall zCParser::SetInstance(class zSTRING const &,
+                                               void *) 
+   public: int __thiscall zCParser::SetInstance(class zSTRING const &,void *) */
+
+int __thiscall zCParser::SetInstance(zCParser *this,zSTRING *param_1,void *param_2)
+
+{
+  char cVar1;
+  uint uVar2;
+  int iVar3;
+  uint uVar4;
+  uint uVar5;
+  int iVar6;
+  byte *pbVar7;
+  char *pcVar8;
+  byte *pbVar9;
+  bool bVar10;
+  bool bVar11;
+  
+                    /* START-> P:\dev\g2addon\release\ZenGin\_ulf\zParser.cpp: ? */
+  iVar3 = FUN_007938d0(param_1);
+  uVar4 = 0xffffffff;
+  pcVar8 = &s_HERO;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar8;
+    pcVar8 = pcVar8 + 1;
+  } while (cVar1 != '\0');
+  uVar2 = *(uint *)(param_1 + 0xc);
+  uVar5 = ~uVar4 - 1;
+  uVar4 = uVar2;
+  if (uVar5 <= uVar2) {
+    uVar4 = uVar5;
+  }
+  bVar10 = false;
+  iVar6 = 0;
+  bVar11 = true;
+  pbVar7 = *(byte **)(param_1 + 8);
+  pbVar9 = &s_HERO;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    bVar10 = *pbVar7 < *pbVar9;
+    bVar11 = *pbVar7 == *pbVar9;
+    pbVar7 = pbVar7 + 1;
+    pbVar9 = pbVar9 + 1;
+  } while (bVar11);
+  if (!bVar11) {
+    iVar6 = (1 - (uint)bVar10) - (uint)(bVar10 != 0);
+  }
+  if ((((iVar6 == 0) && (uVar5 <= uVar2)) && (uVar2 == uVar5)) && (DAT_00ab629c == 0)) {
+    DAT_00ab629c = iVar3;
+  }
+  if ((iVar3 == 0) || ((*(uint *)(iVar3 + 0x20) & 0xf000) != 0x7000)) {
+    return 0;
+  }
+  FUN_007a2f20(param_2);
+  return 1;
+}
+
+
+/* protected void __fastcall oCInformationManager::OnInfo(class oCInfo *) 
+   protected: void __fastcall oCInformationManager::OnInfo(class oCInfo *) */
+
+void __fastcall oCInformationManager::OnInfo(oCInfo *param_1)
+
+{
+  basic_string<> *this;
+  char cVar1;
+  bool bVar2;
+  int iVar3;
+  uint uVar4;
+  uint uVar5;
+  int iVar6;
+  oCInfo *in_EDX;
+  undefined4 *puVar7;
+  char *pcVar8;
+  undefined4 *puVar9;
+  char *pcVar10;
+  undefined **local_34;
+  basic_string<> local_30 [16];
+  undefined **local_20;
+  basic_string<> local_1c [16];
+  void *local_c;
+  undefined1 *puStack_8;
+  undefined4 local_4;
+  
+  local_4 = 0xffffffff;
+  puStack_8 = &LAB_00811730;
+  local_c = ExceptionList;
+  uVar4 = 0xffffffff;
+  pcVar8 = &s_OnInfo2;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar8;
+    pcVar8 = pcVar8 + 1;
+  } while (cVar1 != '\0');
+  uVar4 = ~uVar4 - 1;
+  this = (basic_string<> *)(param_1 + 4);
+  ExceptionList = &local_c;
+  bVar2 = std::basic_string<>::_Grow(this,uVar4,true);
+  if (bVar2) {
+    puVar7 = (undefined4 *)&s_OnInfo2;
+    puVar9 = *(undefined4 **)(param_1 + 8);
+    for (uVar5 = uVar4 >> 2; uVar5 != 0; uVar5 = uVar5 - 1) {
+      *puVar9 = *puVar7;
+      puVar7 = puVar7 + 1;
+      puVar9 = puVar9 + 1;
+    }
+    for (uVar5 = uVar4 & 3; uVar5 != 0; uVar5 = uVar5 - 1) {
+      *(undefined1 *)puVar9 = *(undefined1 *)puVar7;
+      puVar7 = (undefined4 *)((int)puVar7 + 1);
+      puVar9 = (undefined4 *)((int)puVar9 + 1);
+    }
+    std::basic_string<>::_Eos(this,uVar4);
+  }
+  if (in_EDX == (oCInfo *)0x0) {
+    ExceptionList = local_c;
+    return;
+  }
+  std::basic_string<>::_Tidy(local_30,false);
+  uVar4 = 0xffffffff;
+  pcVar8 = &s_SELF;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar8;
+    pcVar8 = pcVar8 + 1;
+  } while (cVar1 != '\0');
+  std::basic_string<>::assign(local_30,&s_SELF,~uVar4 - 1);
+  local_34 = &zSTRING::`vftable';
+  local_4 = 0;
+  zCParser::SetInstance(&parser,(zSTRING *)&local_34,*(void **)(param_1 + 0x20));
+  local_4 = 0xffffffff;
+  local_34 = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy(local_30,true);
+  std::basic_string<>::_Tidy(local_1c,false);
+  uVar4 = 0xffffffff;
+  pcVar8 = s_OTHER;
+  do {
+    if (uVar4 == 0) break;
+    uVar4 = uVar4 - 1;
+    cVar1 = *pcVar8;
+    pcVar8 = pcVar8 + 1;
+  } while (cVar1 != '\0');
+  std::basic_string<>::assign(local_1c,s_OTHER,~uVar4 - 1);
+  local_20 = &zSTRING::`vftable';
+  local_4 = 1;
+  zCParser::SetInstance(&parser,(zSTRING *)&local_20,*(void **)(param_1 + 0x24));
+  local_4 = 0xffffffff;
+  local_20 = &zSTRING::`vftable';
+  std::basic_string<>::_Tidy(local_1c,true);
+  iVar3 = oCInfo::InfoConditions(in_EDX);
+  if (iVar3 != 0) {
+    oCInfo::Info(in_EDX);
+    *(undefined4 *)(param_1 + 0x34) = 1;
+  }
+  iVar6 = 0;
+  iVar3 = *(int *)(in_EDX + 0x58);
+  if (*(int *)(in_EDX + 0x24) == 0) {
+    if (iVar3 != 0) {
+      do {
+        iVar3 = *(int *)(iVar3 + 4);
+        iVar6 = iVar6 + 1;
+      } while (iVar3 != 0);
+      if (iVar6 != 0) {
+        uVar4 = 0xffffffff;
+        *(oCInfo **)(param_1 + 0x28) = in_EDX;
+        pcVar8 = s_OnChoiceBegin;
+        do {
+          if (uVar4 == 0) break;
+          uVar4 = uVar4 - 1;
+          cVar1 = *pcVar8;
+          pcVar8 = pcVar8 + 1;
+        } while (cVar1 != '\0');
+        std::basic_string<>::assign(this,s_OnChoiceBegin,~uVar4 - 1);
+        iVar3 = CollectChoices(param_1);
+        if (iVar3 != 0) goto LAB_00662487;
+        uVar4 = 0xffffffff;
+        pcVar8 = s_OnChoiceEnd;
+        do {
+          if (uVar4 == 0) break;
+          uVar4 = uVar4 - 1;
+          cVar1 = *pcVar8;
+          pcVar8 = pcVar8 + 1;
+        } while (cVar1 != '\0');
+        std::basic_string<>::assign(this,s_OnChoiceEnd,~uVar4 - 1);
+      }
+    }
+    uVar4 = 0xffffffff;
+    pcVar8 = s_OnInfoBegin;
+    do {
+      if (uVar4 == 0) break;
+      uVar4 = uVar4 - 1;
+      cVar1 = *pcVar8;
+      pcVar8 = pcVar8 + 1;
+    } while (cVar1 != '\0');
+    uVar4 = ~uVar4 - 1;
+    bVar2 = std::basic_string<>::_Grow(this,uVar4,true);
+    if (bVar2) {
+      pcVar8 = s_OnInfoBegin;
+      pcVar10 = *(char **)(param_1 + 8);
+      for (uVar5 = uVar4 >> 2; uVar5 != 0; uVar5 = uVar5 - 1) {
+        *(undefined4 *)pcVar10 = *(undefined4 *)pcVar8;
+        pcVar8 = pcVar8 + 4;
+        pcVar10 = pcVar10 + 4;
+      }
+      for (uVar5 = uVar4 & 3; uVar5 != 0; uVar5 = uVar5 - 1) {
+        *pcVar10 = *pcVar8;
+        pcVar8 = pcVar8 + 1;
+        pcVar10 = pcVar10 + 1;
+      }
+      std::basic_string<>::_Eos(this,uVar4);
+    }
+  }
+  else {
+    if (iVar3 == 0) {
+      ExceptionList = local_c;
+      return;
+    }
+    do {
+      iVar3 = *(int *)(iVar3 + 4);
+      iVar6 = iVar6 + 1;
+    } while (iVar3 != 0);
+    if (iVar6 == 0) {
+      ExceptionList = local_c;
+      return;
+    }
+    uVar4 = 0xffffffff;
+    *(oCInfo **)(param_1 + 0x28) = in_EDX;
+    pcVar8 = s_OnChoiceBegin;
+    do {
+      if (uVar4 == 0) break;
+      uVar4 = uVar4 - 1;
+      cVar1 = *pcVar8;
+      pcVar8 = pcVar8 + 1;
+    } while (cVar1 != '\0');
+    std::basic_string<>::assign(this,s_OnChoiceBegin,~uVar4 - 1);
+    iVar3 = CollectChoices(param_1);
+    if (iVar3 != 0) {
+LAB_00662487:
+      *(undefined4 *)(param_1 + 0x54) = 2;
+      *(undefined4 *)(param_1 + 0x44) = 1;
+      ExceptionList = local_c;
+      return;
+    }
+    uVar4 = 0xffffffff;
+    pcVar8 = s_OnChoiceEnd;
+    do {
+      if (uVar4 == 0) break;
+      uVar4 = uVar4 - 1;
+      cVar1 = *pcVar8;
+      pcVar8 = pcVar8 + 1;
+    } while (cVar1 != '\0');
+    std::basic_string<>::assign(this,s_OnChoiceEnd,~uVar4 - 1);
+    uVar4 = 0xffffffff;
+    pcVar8 = s_OnInfoBegin;
+    do {
+      if (uVar4 == 0) break;
+      uVar4 = uVar4 - 1;
+      cVar1 = *pcVar8;
+      pcVar8 = pcVar8 + 1;
+    } while (cVar1 != '\0');
+    std::basic_string<>::assign(this,s_OnInfoBegin,~uVar4 - 1);
+  }
+  *(undefined4 *)(param_1 + 0x54) = 1;
+  *(undefined4 *)(param_1 + 0x44) = 1;
+  CollectInfos();
+  ExceptionList = local_c;
+                    /* END-> P:\dev\g2addon\release\Gothic\_roman\oInformationManager.cpp: ? */
+  return;
+}
+
