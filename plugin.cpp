@@ -2,6 +2,7 @@
 #include "plugin.h"
 #include "UnionAfx.h"
 #include <../UnionSDK/console/Console.h>
+//#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -15,7 +16,7 @@
 
 using namespace Common;
 using namespace UnionCore;
-#ifdef gouthic1
+#ifdef gothic1
 using namespace Gothic_I_Classic;
 #include <../Gothic_I_Classic/API/oNpc.h>
 #include <../Gothic_I_Classic/API/oItem.h>
@@ -28,7 +29,18 @@ using namespace Gothic_II_Addon;
 #include <../Gothic_II_Addon/API/zOption.h>
 #endif
 
-enum { MODE_ALL = 0, MODE_QUEST = 1, MODE_OFF = 2, MODE_NOTRADER = 3 };
+
+
+enum { MODE_ALL = 0, MODE_QUEST = 1, MODE_OFF = 2, MODE_NOTRADER = 3, MODE_LEFTOVER = 4 };
+enum {
+    NN_TRADER = 1,
+    NN_QUEST = 2,
+    NN_IMPORTANT = 4,
+    NN_TALK = 8,
+    NN_LEFTOVER = 16
+};
+//static const int NN_CATEGORY_MASK = NN_TRADER | NN_QUEST | NN_IMPORTANT | NN_TALK;
+
 
 static int   g_StartMode = MODE_ALL;
 static int   g_Mode = MODE_ALL;
@@ -37,7 +49,6 @@ static bool  g_RunConditions = true;   // false = never execute any script, show
 static const bool g_PurityGate = true;      // true = only execute condition scripts proven read-only by bytecode scan
 static bool  g_HideInFocus = true;
 static float g_MinDistance = 0.0f;
-
 static int  g_ChainDepth = 3;      // quest fixpoint hops, 0 = off
 
 
@@ -56,7 +67,8 @@ static bool g_ShadowVm = true;     // evaluate gate-rejected conditions in the r
 static bool g_qDirty = false;      // chain depth changed -> rebuild quest index
 #endif
 
-static const float NN_HEAD_OFFSET = 20.0f;
+
+
 
 static float       g_DistNear = 500.0f;
 static float       g_DistMid = 1000.0f;
@@ -66,20 +78,16 @@ static std::string g_FontFar = "FONT_DEFAULT.TGA";
 
 static bool g_fontsDirty = true;
 static zSTRING* g_fontZ[3] = { nullptr, nullptr, nullptr };
-static zSTRING* g_traderPrefix = nullptr;
+static zSTRING* g_traderPrefix = nullptr; //never freed. The screen owns the view, and the rest are process-lifetime singletons.
 
+static const float NN_HEAD_OFFSET = 20.0f;
 static const DWORD NN_CACHE_MS = 4500;
 static const int   NN_MAX_CHECKS_FRAME = 3;
 
 static std::string g_ExtraPureCsv;       // from ini: ExtraPureExternals
 static bool        g_extraPureDirty = true;
 
-enum {
-    NN_TRADER = 1,
-    NN_QUEST = 2,
-    NN_IMPORTANT = 4,
-    NN_TALK = 8      // available, untold, but not a quest start (weak tier)
-};
+
 
 static zCOLOR NnColor(int flags) {
     if (flags & NN_IMPORTANT) return zCOLOR(80, 200, 255);
@@ -105,8 +113,10 @@ static void NnLog(const std::string& line, bool truncate = false) {
     fprintf(f, "%s\n", line.c_str());
     fclose(f);
 }
-static bool KeyDownNow(int k) { return zinput && zinput->KeyPressed(k) != 0; }
-static bool KeyEdge(int k) { return zinput && zinput->KeyToggled(k) != 0; }
+
+//stops working with 2 monitors plugged in. no idea
+//static bool KeyDownNow(int k) { return zinput && zinput->KeyPressed(k) != 0; }
+//static bool KeyEdge(int k) { return zinput && zinput->KeyToggled(k) != 0; }
 
 static void LoadConfig() {
     if (!zoptions) return;
@@ -123,9 +133,9 @@ static void LoadConfig() {
     g_fontsDirty = true;
 
     g_StartMode = zoptions->ReadInt("NpcNames", "StartMode", 0);
-    g_Radius = zoptions->ReadReal("NpcNames", "Radius", 1500.0f);
+    g_Radius = zoptions->ReadReal("NpcNames", "Radius", 3500.0f);
     g_RunConditions = zoptions->ReadBool("NpcNames", "RunConditions", true) != 0;
-//    g_PurityGate = zoptions->ReadBool("NpcNames", "PurityGate", true) != 0;
+    //    g_PurityGate = zoptions->ReadBool("NpcNames", "PurityGate", true) != 0;
     g_HideInFocus = zoptions->ReadBool("NpcNames", "HideInFocus", true) != 0;
     g_MinDistance = zoptions->ReadReal("NpcNames", "MinDistance", 0.0f);
     g_DebugMode = zoptions->ReadInt("NpcNames", "DebugMode", 0);
@@ -140,7 +150,7 @@ static void LoadConfig() {
         if (oldDepth != g_ChainDepth) g_qDirty = true;
     }
 #endif
-    if (g_StartMode < 0 || g_StartMode > 3) g_StartMode = MODE_ALL;
+    if (g_StartMode < 0 || g_StartMode > 4) g_StartMode = MODE_ALL;
     if (g_Radius < 100.0f)    g_Radius = 100.0f;
     if (g_MinDistance < 0.0f) g_MinDistance = 0.0f;
 
@@ -163,22 +173,27 @@ static bool        g_ViewDirty = false;
 static void NnHandleToggle() {
     static bool wasDown = false;
 
-    bool down = (KeyDownNow(KEY_LSHIFT)
-        && KeyEdge(KEY_K)
-        && NnGameHasFocus());
+    bool down = ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0)
+        && ((GetAsyncKeyState('K') & 0x8000) != 0)
+        && NnGameHasFocus();
+
+    //for some reason doesnt work when i have 2 monitors plugged in.
+    //bool down = (KeyDownNow(KEY_LSHIFT)
+    //    && KeyEdge(KEY_K)
+    //    && NnGameHasFocus());
 
     if (down && !wasDown) {
-        static const int order[4] = { MODE_ALL, MODE_NOTRADER, MODE_QUEST, MODE_OFF };
+        static const int order[5] = { MODE_ALL, MODE_NOTRADER, MODE_QUEST, MODE_LEFTOVER, MODE_OFF };
         int k = 0;
-        for (int i = 0; i < 4; ++i) if (order[i] == g_Mode) k = i;
-        g_Mode = order[(k + 1) % 4];
+        for (int i = 0; i < 5; ++i) if (order[i] == g_Mode) k = i;
+        g_Mode = order[(k + 1) % 5];
         NnClearCache();
-
         g_Msg = (g_Mode == MODE_ALL) ? "NPC names: quest / talk / trader / important"
             : (g_Mode == MODE_NOTRADER) ? "NPC names: quest / talk / important"
             : (g_Mode == MODE_QUEST) ? "NPC names: quest / trader"
+            : (g_Mode == MODE_LEFTOVER) ? "NPC names: quest / talk / trader / important / leftover"
             : "NPC names: OFF";
-        g_MsgUntil = GetTickCount() + 2000;
+        g_MsgUntil = GetTickCount() + 5000;
         g_ViewDirty = true;
         if (g_DebugMode >= 1) NnLog("[mode] " + g_Msg);
     }
@@ -227,7 +242,7 @@ static bool NnIsAssignOp(int tok) {
 // Purity verdict per condition-function symbol (script bytecode never changes at runtime).
 static std::unordered_map<int, bool> g_purity;
 
-static const int NN_QUEST_SCAN_PER_FRAME = 15; //at 3 and depth=3 takes about 17sec to hit; 20-80 sweet spot
+static const int NN_QUEST_SCAN_PER_FRAME = 50; //at 3 and depth=3 takes about 17sec to hit; 20-80 sweet spot
 struct NnScanEnv {
     int createTopic = 0, setStatus = 0, addChoice = 0, knowsInfo = 0;
     int runningSym = 0, runningVal = 0; bool hasRunning = false;
@@ -280,11 +295,12 @@ static void NnQuestIndexReset() {
 #endif
 }
 
-static std::unordered_set<std::string> g_extraPure;
 
+static std::unordered_set<std::string> g_extraPure;
 struct NnExtStat { int clean = 0, dirty = 0; };
 static std::map<std::string, NnExtStat> g_extStat;                       // external -> runs seen clean / dirty
 static std::unordered_map<int, std::vector<std::string>> g_condExternals; // condition fn -> externals it can call
+
 
 // Parses the comma/semicolon/space separated ini list into upper-case symbol names.
 static void NnParseExtraPure() {
@@ -315,18 +331,18 @@ static const std::unordered_set<std::string>& NnPureExternalSet() {
         "HLP_GETINSTANCEID","HLP_ISITEM",
         "WLD_GETDAY","WLD_ISTIME","WLD_ISRAINING",
         "HLP_STRCMP","HLP_ISVALIDNPC",
-        
+
         "NPC_HASITEMS", // Engine-sanctioned lazy unpack of the packed inventory (see notes). Remove this line to be strict.
         "HLP_GETNPC" //a store to a scratch symbol, which is safe because we only evaluate when the parser is idle.
 
 
         /*
         LEFT OFF: "MOB_HASITEMS" (8 infos) cant find virtual call that it makes which makes it not 100% safe
-        
+
         Never seen in conditions / unaudited: NPC_ISPLAYER, NPC_GETTRUEGUILD, NPC_GETATTITUDE,
         MIS_GETSTATUS, LOG_GETTOPICSTATUS, WLD_GETTIMEMIN, ...
-        
-        State changers: NPC_CANSEENPC, 100% triggers it 
+
+        State changers: NPC_CANSEENPC, 100% triggers it
         assumed:
         NPC_CANSEEITEM, NPC_CANSEESOURCE,
         NPC_CANSEENPCFREELOS, NPC_HASDETECTEDNPC
@@ -361,10 +377,9 @@ static void NnAuditAllowlist() {
     char b[128];
     sprintf_s(b, "[allowlist] audit: %d ok, %d missing, %d not-external", ok, missing, notExt);
     NnLog(b);
-    NnLog("[parser] running-function marker = " + std::to_string(
-        *reinterpret_cast<const int*>(reinterpret_cast<const char*>(parser) + 0x219C)));
+    NnLog("[parser] running-function marker = " + std::to_string(parser->curfuncnr)); //Gothic2 addon only im assuming;
 }
-        
+
 
 
 struct NnPurityCtx {
@@ -604,6 +619,10 @@ static const std::vector<oCInfo*>& NnInfosFor(int npcInstance) {
 static std::vector<int> g_snapInstSyms;     // global instance-typed symbols (SELF, OTHER, VICTIM, ITEM, ...)
 static bool g_snapInstValid = false;
 struct NnSnapshot { unsigned globals = 0, instances = 0, objects = 0, world = 0; };
+//static std::unordered_map<int, bool> g_zsTalkCache;
+static std::unordered_map<int, bool> g_pureGreetCache;
+
+
 
 static std::string NnDescribe(oCInfo* info) {
     std::string s = info->name.ToChar();
@@ -615,9 +634,6 @@ static std::string NnDescribe(oCInfo* info) {
 }
 
 #if MD_DEBUG
-
-
-
 
 
 static unsigned NnHashBytes(const void* p, size_t n, unsigned h) {
@@ -725,6 +741,8 @@ static void NnResetScriptCaches() {
     g_infoIndexValid = false;
     g_infosByNpc.clear();
     g_purity.clear();
+    //g_zsTalkCache.clear();
+    g_pureGreetCache.clear();
     g_hashSymsValid = false;
     g_hashSyms.clear();
 
@@ -797,11 +815,17 @@ static void NnLogRawDiff(oCInfo* info, const char* who,
 // Field +0x219C of the game parser holds the symbol index of the script function currently being
 // executed, or -1 when none is. CallFunc wipes the parser's operand stack on entry, so conditions must
 // never be evaluated while a script is mid-execution.
+//#ifndef gouthic2
+//#error "NpcNames: the parser offset 0x219C is only verified for Gothic II: Addon"
+//#endif
+static_assert(offsetof(Gothic_II_Addon::zCParser, curfuncnr) == 0x219C, "zCParser layout changed.Offset mismatch!");
 static bool NnParserBusy()
 {
     if (!parser) return true;
-    const int curFunc = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(parser) + 0x219C);
-    return curFunc > 0;     // -1 (idle) and 0 (never set) both count as idle
+    return parser->curfuncnr > 0; // Guaranteed 0x219C
+
+    //const int curFunc = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(parser) + 0x219C);
+    //return curFunc > 0;     // -1 (idle) and 0 (never set) both count as idle
 }
 
 #if MD_SHADOWVM
@@ -1248,6 +1272,71 @@ static void NnShadowCrossCheck(oCInfo* info, oCNpc* npc, bool real) {
 #pragma endregion ShadowVM2
 #endif
 
+#pragma region ZS_TALK detect and classify
+// "Greeting" detection: does this condition function (or a script function it calls,
+// up to 2 levels) reference the ZS_TALK symbol? Pure bytecode read, never runs the VM.
+/*basically JUMPS OVER stuff like
+func int dia_otmar_firsthello_condition() {
+    if (npc_isinstate(self, zs_talk)) {
+        return true;
+    };
+};
+*/
+static bool NnCondIsPureGreeting(int fn) {
+    if (fn <= 0) return false;
+    auto it = g_pureGreetCache.find(fn);
+    if (it != g_pureGreetCache.end()) return it->second;
+
+    bool ok = false;
+    zCPar_Symbol* fs = NnSym(fn);
+    if (parser && parser->stack.stack && fs && fs->type == NN_SYM_FUNC && !(fs->flags & NN_FLAG_EXTERNAL)) {
+        const zBYTE* code = parser->stack.stack;
+        const int maxBytes = parser->stack.stacksize;
+        int cur = fs->single_intdata, maxJump = 0, steps = 0;
+        bool sawTalk = false, sawIsInState = false, bad = false;
+
+        while (cur >= 0 && cur < maxBytes && steps++ < 512 && !bad) {
+            const int tok = code[cur++];
+            const int os = NnOperandSize(tok);
+            if (cur + os > maxBytes) { bad = true; break; }
+            const int operand = (os >= 4) ? *reinterpret_cast<const int*>(code + cur) : 0;
+            cur += os;
+
+            if (tok == zPAR_TOK_PUSHVAR || tok == (zPAR_TOK_PUSHVAR | zPAR_TOK_FLAGARRAY)) {
+                zCPar_Symbol* s = NnSym(operand);
+                if (!s) { bad = true; }
+                else if (s->type == NN_SYM_FUNC && _stricmp(s->name.ToChar(), "ZS_TALK") == 0) sawTalk = true;
+                else if (!(s->flags & zPAR_FLAG_CONST)) bad = true;      // real variable -> extra condition
+            }
+            else if (tok == zPAR_TOK_PUSHINT) {
+                zCPar_Symbol* s = NnSym(operand);
+                if (s && s->type == NN_SYM_FUNC && _stricmp(s->name.ToChar(), "ZS_TALK") == 0) sawTalk = true;
+            }
+            else if (tok == zPAR_TOK_PUSHINST) {
+                zCPar_Symbol* s = NnSym(operand);
+                if (!s || (_stricmp(s->name.ToChar(), "SELF") != 0 && _stricmp(s->name.ToChar(), "OTHER") != 0)) bad = true;
+            }
+            else if (tok == zPAR_TOK_CALL) {
+                bad = true;                                              // script function call
+            }
+            else if (tok == zPAR_TOK_CALLEXTERN) {
+                zCPar_Symbol* s = NnSym(operand);
+                if (s && _stricmp(s->name.ToChar(), "NPC_ISINSTATE") == 0) sawIsInState = true;
+                else bad = true;                                         // any other external
+            }
+            else if (tok == zPAR_TOK_JUMP || tok == zPAR_TOK_JUMPF) {
+                if (operand > maxJump && operand < maxBytes) maxJump = operand;
+            }
+            else if (tok == zPAR_TOK_RET) {
+                if (cur > maxJump) break;
+            }
+        }
+        ok = !bad && sawTalk && sawIsInState;
+    }
+    g_pureGreetCache[fn] = ok;
+    return ok;
+}
+#pragma endregion
 
 // Runs a dialogue's condition. Returns true if the dialogue is currently available.
 // Only executes script code if the condition has been proven read-only (or the gate is disabled).
@@ -1413,7 +1502,8 @@ static void NnScanFn(int pos, int depth, const NnScanEnv& e, NnScanOut& o, bool 
             if (operand > maxJump && operand < maxBytes) maxJump = operand;
         }
         else if (tok == zPAR_TOK_CALL) {
-            if (calls.size() < 32) calls.push_back(operand);
+            if (calls.size() < 32 && std::find(calls.begin(), calls.end(), operand) == calls.end())
+                calls.push_back(operand);
         }
         else if (tok == zPAR_TOK_CALLEXTERN) {
             if (body) {
@@ -1682,7 +1772,6 @@ static bool NnInfoStartsQuest(oCInfo* info) { return NnQuestVerdictFor(info).yes
 
 
 
-
 static int NnClassifyNpc(oCNpc* npc, bool includeImportant, std::string* why) {
     oCNpc* hero = oCNpc::player;
     if (!npc || !hero || !ogame) return 0;
@@ -1690,10 +1779,12 @@ static int NnClassifyNpc(oCNpc* npc, bool includeImportant, std::string* why) {
     const int npcInstance = npc->GetInstance();
     int flags = 0;
 
+
     struct Cand { oCInfo* info; bool important; };
     std::vector<Cand> candidates;
 
     const std::vector<oCInfo*>& infos = NnInfosFor(npcInstance);
+    oCInfo* greetCand = nullptr;
     for (size_t k = 0; k < infos.size(); ++k) {
         oCInfo* info = infos[k];
         if (!info) continue;
@@ -1703,14 +1794,18 @@ static int NnClassifyNpc(oCNpc* npc, bool includeImportant, std::string* why) {
         if (info->WasTold()) continue;
 
         const bool imp = info->pd.important != 0;
-        if (imp && !includeImportant) continue;
-        if (!imp && info->pd.description.IsEmpty()) continue;
+        if (!imp && info->pd.nr >= 999) continue;
+        if (imp && !includeImportant) {
+            if (g_RunConditions && !greetCand && NnCondIsPureGreeting(info->pd.conditions)) greetCand = info;
+            continue;
+        }
 
+        if (!imp && info->pd.description.IsEmpty()) continue;
         Cand c = { info, imp };
         candidates.push_back(c);
     }
 
-    if (candidates.empty()) return flags;
+    if (candidates.empty() && !greetCand) return flags;
 
     // No script execution at all: any untold dialogue counts.
     if (!g_RunConditions) {
@@ -1735,6 +1830,7 @@ static int NnClassifyNpc(oCNpc* npc, bool includeImportant, std::string* why) {
     guard.Apply(npc, hero);
 
     bool questFound = false, talkFound = false, importantFound = false;
+    oCInfo* pendingGreeting = greetCand;
 
     for (size_t i = 0; i < candidates.size(); ++i) {
         oCInfo* info = candidates[i].info;
@@ -1743,7 +1839,11 @@ static int NnClassifyNpc(oCNpc* npc, bool includeImportant, std::string* why) {
         if (importantFound) break;
         if (!imp && questFound) continue;
 
-        if (!NnEvalCondition(info, npc)) continue;
+        if (!NnEvalCondition(info, npc)) {
+            // untold greeting that only fires once the NPC is in ZS_Talk -> "never talked to"
+            if (imp && !pendingGreeting && NnCondIsPureGreeting(info->pd.conditions)) pendingGreeting = info;
+            continue;
+        }
 
         if (imp) {
             importantFound = true;
@@ -1758,13 +1858,26 @@ static int NnClassifyNpc(oCNpc* npc, bool includeImportant, std::string* why) {
             if (why && why->empty()) *why = NnDescribe(info);
         }
     }
+    if (pendingGreeting && !importantFound && !questFound) {
+        if (NnInfoStartsQuest(pendingGreeting)) {
+            questFound = true;
+            if (why) *why = NnDescribe(pendingGreeting) + " {quest behind greeting: " + NnQuestVerdictFor(pendingGreeting).how + "}";
+        }
+        else if (!talkFound) {
+            talkFound = true;
+            if (why && why->empty()) *why = "{greeting pending}";
+        }
+    }
     if (importantFound) return flags | NN_IMPORTANT;
     if (questFound)     return flags | NN_QUEST;
-    return talkFound ? (flags | NN_TALK) : flags;
+    if (talkFound)      return flags | NN_TALK;
+    // Reaching this point means at least one info survived the data filter
+    // and none of them produced important / quest / talk.
+    if (why && why->empty()) *why = "{leftover} " + NnDescribe(candidates[0].info);
+    return flags | NN_LEFTOVER;
 }
 
 #pragma endregion
-
 
 
 
@@ -1990,8 +2103,8 @@ static void NnRunCensus() {
 
 static void NnHandleCensusHotkey() {
     static bool wasDown = false;
-    const bool down = (KeyEdge(KEY_V))
-        && KeyDownNow(KEY_LSHIFT)
+    const bool down = ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0)
+        && ((GetAsyncKeyState('V') & 0x8000) != 0)
         && NnGameHasFocus();
     if (down && !wasDown) NnRunCensus();
     wasDown = down;
@@ -2000,10 +2113,8 @@ static void NnHandleCensusHotkey() {
 
 
 
-
-
 struct NnEntry { int flags; DWORD time; };
-static std::unordered_map<oCNpc*, NnEntry> nnCache;
+static std::unordered_map<oCNpc*, NnEntry> nnCache; //could inherit a stale label for a moment but don't care
 static DWORD nnLastPurge = 0;
 
 static void NnClearCache() { nnCache.clear(); }
@@ -2022,17 +2133,18 @@ static int NnGetFlags(oCNpc* npc, int& budget, DWORD now) {
 
     std::string why;
     NnEntry e;
-    e.flags = NnClassifyNpc(npc, g_Mode == MODE_ALL || g_Mode == MODE_NOTRADER, g_DebugMode >= 1 ? &why : nullptr);
+    e.flags = NnClassifyNpc(npc, g_Mode == MODE_ALL || g_Mode == MODE_NOTRADER || g_Mode == MODE_LEFTOVER, g_DebugMode >= 1 ? &why : nullptr);
     e.time = now;
     nnCache[npc] = e;
 
     if (g_DebugMode >= 1 && e.flags != oldFlags) {
         char head[160];
-        sprintf_s(head, "trader=%d quest=%d talk=%d important=%d",
+        sprintf_s(head, "trader=%d quest=%d talk=%d important=%d leftover=%d",
             (e.flags & NN_TRADER) ? 1 : 0,
             (e.flags & NN_QUEST) ? 1 : 0,
             (e.flags & NN_TALK) ? 1 : 0,
-            (e.flags & NN_IMPORTANT) ? 1 : 0);
+            (e.flags & NN_IMPORTANT) ? 1 : 0,
+            (e.flags & NN_LEFTOVER) ? 1 : 0);
         NnLog(std::string(npc->GetName(0).ToChar()) + " : " + head +
             (why.empty() ? "" : "  <- " + why));
     }
@@ -2059,7 +2171,7 @@ static void NnRebuildFonts() {
     g_fontsDirty = false;
 }
 
-static zCView* pNameView = nullptr;
+static zCView* pNameView = nullptr; //never freed. The screen owns the view, and the rest are process-lifetime singletons. 
 
 static void NnDraw() {
     const bool msgActive = GetTickCount() < g_MsgUntil;
@@ -2143,6 +2255,8 @@ static void NnDraw() {
         int flags = NnGetFlags(npc, budget, now);
         if (g_Mode == MODE_QUEST)    flags &= ~NN_TALK;
         if (g_Mode == MODE_NOTRADER) flags &= ~NN_TRADER;
+        if (g_Mode != MODE_LEFTOVER) flags &= ~NN_LEFTOVER;
+
         if (flags == 0 && g_DebugMode < 2) continue;
 
         zSTRING npcName = npc->GetName(0);
