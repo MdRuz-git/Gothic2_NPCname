@@ -14,8 +14,9 @@ if Autorun folder does not exist, install Union.
 or place .vdf in:  
 Gothic2\Data\Plugins  
 Requires Union 1.0m  
-  
-  
+
+  <details>
+  <summary>gothic.ini</summary>
 // SETTINGS  ([NpcNames] section)  
 //   StartMode=0       0 = quest/trader/important, 1 = quest/trader, 2 = off  
 //   Radius=1500       cm  
@@ -27,14 +28,16 @@ Requires Union 1.0m
 //   FontMid=FONT_DEFAULT.TGA  
 //   FontFar=FONT_DEFAULT.TGA  
 // Hotkey: LShift + K cycles  ALL -> QUEST/merchant -> OFF  
-
+  </details>  
+   <details>
+    <summary>MODES/COLOR</summary>
 Orange = quest giver *in the current moment* MEANING-> talk -> get quest -> name disappears  
 Light Orange = NPC with which player not talked to yet or dialogue not yet heard
 Cyan = NPC who will auto initiate conversation when in close range.  
 $ Orange = quest giver + merchant
 $ Gold = merchant  
 Grey = LEFTOVER, NPCs who have dialogue, but nothing the mod can sort into quest, talk, trader or important.  
-
+   </details>
 font size is equal to chosen font, FONT_DEFAULT.TGA seems to be the smallest.  
 the logic uses cache which only does any calculation every 15sec, capped for only 3 NPCs per frame.  
 the NPC name will be the exact bit value as in game, MEANING it supports all languages.  
