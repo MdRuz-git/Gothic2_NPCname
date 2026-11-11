@@ -5,8 +5,8 @@ Colors those names based on hardset of rules. (see colors)
  
 Gothic2 Night Raven NK; Union; shows quest givers NPC names on screen.  
 should work for any mod based on Gothic2 Night Raven; tested on Chronicles of Myrtana and New Balance.  
-
-Install:  
+  <details>
+  <summary>Install:</summary>
 drop the NPCnames.dll into:  
 Gothic2/system/Autorun  
 if Autorun folder does not exist, install Union.  
@@ -14,6 +14,8 @@ if Autorun folder does not exist, install Union.
 or place .vdf in:  
 Gothic2\Data\Plugins  
 Requires Union 1.0m  
+ </details>
+
 
   <details>
   <summary>gothic.ini</summary>
