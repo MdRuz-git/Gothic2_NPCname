@@ -1,6 +1,8 @@
 # Gothic2_NPCname
-
--> translate.google.com  
+-> translate.google.com 
+Renders names of npcs with support for any language, in radius around the player, without dependency on whether that npc is currently spawned or not. (radius can be configured)  
+Colors those names based on hardset of rules. (see colors)
+ 
 Gothic2 Night Raven NK; Union; shows quest givers NPC names on screen.  
 should work for any mod based on Gothic2 Night Raven; tested on Chronicles of Myrtana and New Balance.  
 
@@ -31,6 +33,7 @@ Light Orange = NPC with which player not talked to yet or dialogue not yet heard
 Cyan = NPC who will auto initiate conversation when in close range.  
 $ Orange = quest giver + merchant
 $ Gold = merchant  
+Grey = LEFTOVER, NPCs who have dialogue, but nothing the mod can sort into quest, talk, trader or important.  
 
 font size is equal to chosen font, FONT_DEFAULT.TGA seems to be the smallest.  
 the logic uses cache which only does any calculation every 15sec, capped for only 3 NPCs per frame.  
@@ -38,7 +41,7 @@ the NPC name will be the exact bit value as in game, MEANING it supports all lan
 
 RunConditions (default 1)  
     When enabled, the plugin asks the game whether each NPC's open dialogue options are currently available, using the same condition check the dialogue menu uses. This is what keeps false positives low.  
-v2 of the plugin: old warning no longer applies.  
+    This is guarded by a safe readonly externals whitelist. and various other safety features.  
+      
     With RunConditions=0 no script code is ever run by this plugin, but names are shown for every NPC with an unfinished non-permanent dialogue, whether or not it is currently available. Expect many more false positives.  
-  
 ![G2NPCnames](G2NPCnames.png)
