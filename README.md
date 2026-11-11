@@ -1,5 +1,5 @@
 # Gothic2_NPCname
--> translate.google.com 
+-> translate.google.com  
 Renders names of npcs with support for any language, in radius around the player, without dependency on whether that npc is currently spawned or not. (radius can be configured)  
 Colors those names based on hardset of rules. (see colors)
  
